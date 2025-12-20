@@ -19,18 +19,19 @@ body {
 body {
   @apply font-sans antialiased;
   @apply flex flex-col;
-  @apply bg-stone-100 dark:bg-stone-900;
-  @apply text-black/50 dark:text-white/75;
+  @apply bg-white dark:bg-black;
+  @apply text-black/60 dark:text-white/80;
 }
+
 
 header {
   @apply fixed top-0 left-0 right-0 z-50 py-5;
-  @apply bg-stone-100/75 dark:bg-stone-900/25;
+  @apply bg-neutral-50/80 dark:bg-neutral-950/70;
   @apply backdrop-blur-sm saturate-200;
 }
 
 main {
-  @apply flex-1 py-32;
+  @apply flex-1 py-24;
 }
 
 footer {
