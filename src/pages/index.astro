@@ -3,54 +3,73 @@ import { type CollectionEntry, getCollection } from "astro:content";
 import PageLayout from "@layouts/PageLayout.astro";
 import Container from "@components/Container.astro";
 import ArrowCard from "@components/ArrowCard.astro";
+import ShowAll from "@components/ShowAll.astro";
 import { BLOG } from "@consts";
 
-const data = (await getCollection("blog"))
+const allPosts = (await getCollection("blog"))
   .filter(post => !post.data.draft)
   .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
-  
-type Acc = {
-  [year: string]: CollectionEntry<"blog">[];
-}
 
-const posts = data.reduce((acc: Acc, post) => {
-    const year = post.data.date.getFullYear().toString();
-    if (!acc[year]) {
-      acc[year] = [];
-    }
-    acc[year].push(post);
-    return acc;
-  }, {});
+// Filter posts by category based on slug
+const technicalPosts = allPosts
+  .filter(post => post.slug.startsWith("technical/"))
+  .slice(0, 5);
 
-const years = Object.keys(posts).sort((a, b) => parseInt(b) - parseInt(a)); 
+const lifeExperiencePosts = allPosts
+  .filter(post => post.slug.startsWith("life-experiences/"))
+  .slice(0, 5);
 ---
 
 <PageLayout title={BLOG.TITLE} description={BLOG.DESCRIPTION}>
   <Container>
     <div class="space-y-10">
       <div class="animate font-semibold text-black dark:text-white">
-        Explore Writings
+        Explore My Thoughts
       </div>
-      <div class="space-y-4">
-        {years.map(year => (
-          <section class="animate space-y-4">
+      
+      {technicalPosts.length > 0 && (
+        <section class="animate space-y-4">
+          <div class="flex items-center justify-between">
             <div class="font-semibold text-black dark:text-white">
-              {year}
+              Latest Technical Writings
             </div>
-            <div>
-              <ul class="flex flex-col gap-4">
-                {
-                  posts[year].map((post) => (
-                    <li>
-                      <ArrowCard entry={post}/>
-                    </li>
-                  ))
-                }
-              </ul>
+            <ShowAll href="/blog/technical">
+              Show All
+            </ShowAll>
+          </div>
+          <div>
+            <ul class="flex flex-col gap-4">
+              {technicalPosts.map((post) => (
+                <li>
+                  <ArrowCard entry={post}/>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
+
+      {lifeExperiencePosts.length > 0 && (
+        <section class="animate space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="font-semibold text-black dark:text-white">
+              New Life Experiences
             </div>
-          </section>
-        ))}
-      </div>
+            <ShowAll href="/blog/life-experiences">
+              Show All
+            </ShowAll>
+          </div>
+          <div>
+            <ul class="flex flex-col gap-4">
+              {lifeExperiencePosts.map((post) => (
+                <li>
+                  <ArrowCard entry={post}/>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   </Container>
 </PageLayout>
