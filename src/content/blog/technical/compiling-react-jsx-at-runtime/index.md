@@ -7,11 +7,11 @@ date: "2025-12-28"
 Recently, I tackled a frontend engineering challenge that made me pause and think:  
 **if we want to write JSX at runtime and render it, how can this be done?**
 
-When we use React to build applications, JSX gets compiled into plain JavaScript during build time. But what if we are building a system where users need the ability to create components at runtime—and we need to compile and render those components immediately?
+When we use React to build applications, JSX gets compiled into plain JavaScript during build time. But what if we are building a system where users need the ability to create components at runtime and we need to compile and render those components immediately?
 
 The system being built had a feature where users could assemble UI templates dynamically. These templates were not predefined components; they were authored at runtime and needed to behave like first-class React components. That meant taking JSX provided as input and turning it into something React could actually render on the fly.
 
-The challenge sounded straightforward but was difficult to solve in practice—especially while maintaining reasonable **safety**, **performance**, and **developer ergonomics**. I started looking for answers but found very little concrete guidance online. Eventually, I pieced together a workable approach.
+The challenge sounded straightforward but was difficult to solve in practice especially while maintaining reasonable **safety**, **performance**, and **developer ergonomics**. I started looking for answers but found very little concrete guidance online. Eventually, I pieced together a workable approach.
 
 This article is a breakdown of the approaches I explored, why some of them failed in practice, and the architectural lessons that emerged while building a dynamic widget system under real-world constraints.
 
@@ -76,7 +76,7 @@ becomes something conceptually equivalent to:
 React.createElement("div", null, "Hello")
 ```
 
-Once in this form, the code is just JavaScript—and JavaScript can be executed dynamically.
+Once in this form, the code is just JavaScript and JavaScript can be executed dynamically.
 
 ### Key Points
 
@@ -224,7 +224,7 @@ This is **not** something you use casually. It is justified only when runtime fl
 
 ## Avoiding Recompile Overhead
 
-Runtime JSX compilation is expensive. Babel performs real compiler work—parsing, transforming, and generating JavaScript. Running this on every render would be wasteful.
+Runtime JSX compilation is expensive. Babel performs real compiler work parsing, transforming, and generating JavaScript. Running this on every render would be wasteful.
 
 To address this, the compiled output was **cached and reused** until the source JSX changed. This ensured:
 
