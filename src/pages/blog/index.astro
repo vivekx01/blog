@@ -1,0 +1,82 @@
+---
+import { type CollectionEntry, getCollection } from "astro:content";
+import PageLayout from "@layouts/PageLayout.astro";
+import Container from "@components/Container.astro";
+import ArrowCard from "@components/ArrowCard.astro";
+import { BLOG } from "@consts";
+
+const allPosts = (await getCollection("blog"))
+  .filter((post) => !post.data.draft)
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
+
+type CategoryPosts = {
+  [category: string]: CollectionEntry<"blog">[];
+};
+
+const slugifyCategory = (name: string) =>
+  name.toLowerCase().replace(/\s+/g, "-");
+
+const getCategory = (post: CollectionEntry<"blog">) => {
+  if (post.data.category) {
+    return post.data.category;
+  }
+
+  const parts = post.slug.split("/");
+  const section = parts[0];
+  const subcategory = parts[1];
+
+  if (section === "technical" && subcategory) {
+    return subcategory.charAt(0).toUpperCase() + subcategory.slice(1).replace(/-/g, " ");
+  }
+
+  if (section === "life-experiences") {
+    return "Life Experiences";
+  }
+
+  return "General";
+};
+
+const postsByCategory = allPosts.reduce((acc: CategoryPosts, post) => {
+  const category = getCategory(post);
+  if (!acc[category]) {
+    acc[category] = [];
+  }
+  acc[category].push(post);
+  return acc;
+}, {});
+
+const categories = Object.keys(postsByCategory).sort((a, b) => {
+  if (a === "General") return 1;
+  if (b === "General") return -1;
+  return a.localeCompare(b);
+});
+---
+
+<PageLayout title={BLOG.TITLE} description={BLOG.DESCRIPTION}>
+  <Container>
+    <div class="space-y-10">
+      <div class="animate font-semibold text-black dark:text-white">
+        Browse Articles by Category
+      </div>
+      <div class="space-y-8">
+        {categories.map((name) => (
+          <section id={slugifyCategory(name)} class="animate space-y-4">
+            <div class="font-semibold text-lg text-black dark:text-white border-b border-black/10 dark:border-white/10 pb-2">
+              {name}
+            </div>
+            <div>
+              <ul class="flex flex-col gap-4">
+                {postsByCategory[name].map((post) => (
+                  <li>
+                    <ArrowCard entry={post} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  </Container>
+</PageLayout>
+
