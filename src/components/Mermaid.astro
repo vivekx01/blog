@@ -58,19 +58,20 @@ const { code } = Astro.props;
   const FOREIGN_OBJECT_WIDTH_PADDING = 24;
   const FOREIGN_OBJECT_HEIGHT_PADDING = 8;
 
-  function postProcessSvg(svgString) {
+  function postProcessSvg(svgString: string) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(svgString, "image/svg+xml");
     const svg = doc.querySelector("svg");
 
-    if (svg?.getAttribute("viewBox")) {
-      const [x, y, w, h] = svg.getAttribute("viewBox").split(/\s+/).map(Number);
-      svg.setAttribute("viewBox", [x - VIEWBOX_PADDING, y - VIEWBOX_PADDING, w + 2 * VIEWBOX_PADDING, h + 2 * VIEWBOX_PADDING].join(" "));
+    const viewBox = svg?.getAttribute("viewBox");
+    if (svg && viewBox) {
+      const [x, y, w, h] = viewBox.split(/\s+/).map(Number);
+      (svg as SVGElement).setAttribute("viewBox", [x - VIEWBOX_PADDING, y - VIEWBOX_PADDING, w + 2 * VIEWBOX_PADDING, h + 2 * VIEWBOX_PADDING].join(" "));
     }
 
     doc.querySelectorAll("foreignObject").forEach((fo) => {
-      const w = parseFloat(fo.getAttribute("width"));
-      const h = parseFloat(fo.getAttribute("height"));
+      const w = parseFloat(fo.getAttribute("width") ?? "");
+      const h = parseFloat(fo.getAttribute("height") ?? "");
       if (!Number.isNaN(w)) fo.setAttribute("width", String(w + FOREIGN_OBJECT_WIDTH_PADDING));
       if (!Number.isNaN(h)) fo.setAttribute("height", String(h + FOREIGN_OBJECT_HEIGHT_PADDING));
     });
