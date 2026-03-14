@@ -16,8 +16,6 @@ They had brought a lot of food. And by a lot, I mean we were being offered somet
 
 We reached New Delhi Railway Station at around 5:30 a.m., perfectly on time. Stepping out of the train was a shock. The cold hit immediately, and out of curiosity I checked the AQI. It was around 600. Yes, 600 in the morning. Delhi was struggling.
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/02.jpg)
-
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/03.jpg)
 
 From there, we boarded the Shatabdi Express to Kathgodam. Compared to the overnight journey, this one felt quick and comfortable. By around noon, we had reached Kathgodam, the official entry point to the hills.
@@ -32,7 +30,7 @@ The bus ride was an experience. Narrow roads, sharp turns, zigzag climbs, and ba
 
 We finally reached Bhowali, and thankfully our hotel was very close to the bus stand. After checking in, we found the room neat, clean, and well maintained. Hot water worked, electricity was stable, Wi-Fi was decent, everything you actually care about after a long journey. The ambience and decor were simple but pleasant, and we felt comfortable right away.
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/05.jpg)
+![Uttarakhand Trip Images](/blog/uttarakhand-trip/06.jpg)
 
 ### First Stop: Kainchi Dham
 
@@ -40,15 +38,17 @@ After freshening up and taking a quick shower, we headed out to our first destin
 
 The place was beautiful. Surrounded by mountains, with a small water stream flowing below the bridge leading to the temple, it had a calm yet lively atmosphere. There were many devotees around and quite a few monkeys too. Very alert monkeys. People were offering them bits of prasad while carefully guarding their bags.
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/06.jpg)
+
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/07.jpg)
 
 After darshan, we went to a nearby hotel for lunch. The restaurant had large windows and was located right next to the temple, offering a great view of both the stream and the mandir. We ordered kadhai paneer and butter roti, and it was genuinely delicious. Good food with a mountain view just hits differently.
+![Uttarakhand Trip Images](/blog/uttarakhand-trip/09.jpg)
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/08.jpg)
+
 
 Post lunch, we returned to our hotel and decided to rest. The day had already been long, and calling it early felt like the right decision.
+![Uttarakhand Trip Images](/blog/uttarakhand-trip/08.jpg)
 
 ### Nainital Day: Temples, Views, and Too Much Walking
 
@@ -56,7 +56,7 @@ The next day, we left early for Nainital. A shared taxi from Bhowali got us ther
 
 When we reached, the morning aarti was going on, so we joined in. Walking barefoot in the cold with water on the floor was not exactly pleasant. My feet were freezing. Still, the views from the temple made it worth it.
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/09.jpg)
+
 
 After that, we headed back to Nainital city center. We spent time around Naini Lake, walked along Mall Road, and soaked in the usual hill-station vibe. From there, we went to Naina Devi Temple nearby for darshan.
 
@@ -84,13 +84,13 @@ The biggest highlight was the Bengal tiger. We were lucky enough to see it from 
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/17.jpg)
 
+![Uttarakhand Trip Images](/blog/uttarakhand-trip/18.jpg)
+
 ### Ghorakhal Golu Devta Temple
 
 By afternoon, we returned to Bhowali and had lunch. Since we still had time and energy left, we decided to visit Ghorakhal Golu Devta Temple, which was around 4 km away and uphill.
 
 We took a taxi to go up and planned to walk back down. The temple is famously known as the Bell Temple, and once inside, it was clear why. People tie their written wishes inside the temple, and once fulfilled, they return to tie a bell. Thousands of bells hung everywhere. It was fascinating and slightly overwhelming.
-
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/18.jpg)
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/19.jpg)
 
@@ -98,21 +98,23 @@ After darshan, we started walking back. On the way, the sun began to set. The sk
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/20.jpg)
 
+![Uttarakhand Trip Images](/blog/uttarakhand-trip/21.jpg)
+
 We reached, ordered food, and called it a day.
 
 ### Lakes Day: Bhimtal and Naukuchiatal
 
 The third day was deliberately kept chill. We left after 9 a.m. and took a taxi to Bhimtal. The place was quiet and peaceful. The lake was large, calm, and sparkling under sunlight.
 
-![Uttarakhand Trip Images](/blog/uttarakhand-trip/21.jpg)
-
-We decided to go boating, which turned out to be a great experience. There was an aquarium café in the middle of the lake, and ducks swimming around added to the vibe. After boating, we visited the nearby Bhimeshwar Temple, which was small, quiet, and serene.
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/22.jpg)
 
-Breakfast followed, this time pahadi maggi and momos near the lake. Both were excellent.
+We decided to go boating, which turned out to be a great experience. There was an aquarium café in the middle of the lake, and ducks swimming around added to the vibe. After boating, we visited the nearby Bhimeshwar Temple, which was small, quiet, and serene.
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/23.jpg)
+
+Breakfast followed, this time pahadi maggi and momos near the lake. Both were excellent.
+
 
 ![Uttarakhand Trip Images](/blog/uttarakhand-trip/24.jpg)
 
