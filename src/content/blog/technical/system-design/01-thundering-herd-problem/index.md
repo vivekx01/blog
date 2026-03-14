@@ -14,7 +14,7 @@ draft: false
 
 <small>*Image: News18*</small>
 
-Picture a Mumbai local at peak hour. The train pulls in, doors open, and right then hundreds of people rush for the same few doors. Everyone was waiting for that one moment. Everyone moves at once. The doors and the platform become the bottleneck. It’s not that the crowd is (so the crowd might be big, but the real issue is they're all hitting the same narrow point at the same time). it’s that they’re all hitting the same narrow point at the same time. Chaos, delays, and sometimes worse.
+Picture a Mumbai local at peak hour. The train pulls in, doors open, and right then hundreds of people rush for the same few doors. Everyone was waiting for that one moment. Everyone moves at once. The doors and the platform become the bottleneck. It’s not that the crowd is so the crowd might be big, but the real issue is they're all hitting the same narrow point at the same time. Chaos, delays, and sometimes worse.
 
 In systems, the thundering herd is the same idea: many clients or requests “wake up” or react at the same time and hit the same resource: a cache, a database, or a server. All at once. One shared resource, one synchronized moment, and suddenly the system is overloaded. Once you see that pattern, you can start designing around it.
 

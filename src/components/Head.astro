@@ -87,33 +87,28 @@ const { title, description, image = "/nano.png" } = Astro.props;
     const backToPrev = document.getElementById("back-to-prev");
     backToPrev?.addEventListener("click", () => window.history.back());
 
-    const lightThemeButton = document.getElementById("light-theme-button");
-    lightThemeButton?.addEventListener("click", () => {
-      localStorage.setItem("theme", "light");
-      toggleTheme(false);
+    const themeToggleButton = document.getElementById("theme-toggle-button");
+    themeToggleButton?.addEventListener("click", () => {
+      const current = localStorage.theme || "dark";
+      const next = current === "light" ? "dark" : "light";
+      localStorage.setItem("theme", next);
+      toggleTheme(next === "dark");
+      updateThemeButtonIcon();
     });
 
-    const darkThemeButton = document.getElementById("dark-theme-button");
-    darkThemeButton?.addEventListener("click", () => {
-      localStorage.setItem("theme", "dark");
-      toggleTheme(true);
-    });
-
-    const systemThemeButton = document.getElementById("system-theme-button");
-    systemThemeButton?.addEventListener("click", () => {
-      localStorage.setItem("theme", "system");
-      toggleTheme(window.matchMedia("(prefers-color-scheme: dark)").matches);
-    });
-
-    window.matchMedia("(prefers-color-scheme: dark)")
-      .addEventListener("change", event => {
-        if (localStorage.theme === "system" || !localStorage.theme) {
-          toggleTheme(event.matches);
-        }
-      }
-    );
-
+    updateThemeButtonIcon();
     document.addEventListener("scroll", onScroll);
+  }
+
+  function updateThemeButtonIcon() {
+    const btn = document.getElementById("theme-toggle-button");
+    if (!btn) return;
+    const currentTheme = localStorage.theme || "dark";
+    const iconToShow = currentTheme === "dark" ? "light" : "dark";
+    btn.querySelectorAll(".theme-icon").forEach((el) => {
+      el.classList.toggle("current", el.getAttribute("data-theme") === iconToShow);
+    });
+    btn.setAttribute("aria-label", `Switch to ${iconToShow} mode`);
   }
 
   function animate() {
@@ -171,13 +166,9 @@ function toggleTheme(dark) {
   }
 
   function preloadTheme() {
-    const userTheme = localStorage.theme;
-
-    if (userTheme === "light" || userTheme === "dark") {
-      toggleTheme(userTheme === "dark");
-    } else {
-      toggleTheme(window.matchMedia("(prefers-color-scheme: dark)").matches);
-    }
+    const userTheme = localStorage.theme || "dark";
+    toggleTheme(userTheme === "dark");
+    updateThemeButtonIcon();
   }
 
   document.addEventListener("DOMContentLoaded", () => init());
