@@ -5,6 +5,7 @@ import Container from "@components/Container.astro";
 import FormattedDate from "@components/FormattedDate.astro";
 import { readingTime } from "@lib/utils";
 import BackToPrev from "@components/BackToPrev.astro";
+import Mermaid from "@components/Mermaid.astro";
 
 export async function getStaticPaths() {
   const posts = (await getCollection("blog"))
@@ -43,7 +44,7 @@ const { Content } = await post.render();
       </div>
     </div>
     <article class="animate">
-      <Content />
+      <Content components={{ Mermaid }} />
     </article>
   </Container>
 </PageLayout>

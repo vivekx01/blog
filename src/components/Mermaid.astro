@@ -1,0 +1,100 @@
+---
+/**
+ * Renders a Mermaid diagram from the given code string.
+ * Use in MDX: <Mermaid code={`graph TD\n  A --> B`} />
+ */
+interface Props {
+  code: string;
+}
+const { code } = Astro.props;
+---
+<div class="mermaid-diagram my-4 w-full overflow-x-auto rounded-lg bg-white px-2 py-3">
+  <pre class="mermaid mermaid-fit bg-white">{code}</pre>
+</div>
+<style>
+  .mermaid-diagram .mermaid-fit {
+    padding-left: 4px;
+  }
+  .mermaid-diagram .mermaid-fit svg {
+    max-width: 100%;
+    height: auto;
+  }
+</style>
+<script>
+  import mermaid from "mermaid";
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "base",
+    securityLevel: "loose",
+    flowchart: {
+      padding: 24,
+      diagramPadding: 24,
+    },
+    sequence: {
+      diagramMarginX: 16,
+      diagramMarginY: 8,
+      boxMargin: 8,
+    },
+    themeVariables: {
+      background: "#f4f4f5",
+      primaryColor: "#e0f2fe",
+      primaryTextColor: "#18181b",
+      primaryBorderColor: "#0ea5e9",
+      lineColor: "#3f3f46",
+      secondaryColor: "#f4f4f5",
+      tertiaryColor: "#ffffff",
+      textColor: "#18181b",
+      mainBkg: "#e0f2fe",
+      nodeBorder: "#0ea5e9",
+      clusterBkg: "#f4f4f5",
+      titleColor: "#18181b",
+      edgeLabelBackground: "#ffffff",
+      nodeTextColor: "#18181b",
+    },
+  });
+
+  const VIEWBOX_PADDING = 24;
+  const FOREIGN_OBJECT_WIDTH_PADDING = 24;
+  const FOREIGN_OBJECT_HEIGHT_PADDING = 8;
+
+  function postProcessSvg(svgString) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgString, "image/svg+xml");
+    const svg = doc.querySelector("svg");
+
+    if (svg?.getAttribute("viewBox")) {
+      const [x, y, w, h] = svg.getAttribute("viewBox").split(/\s+/).map(Number);
+      svg.setAttribute("viewBox", [x - VIEWBOX_PADDING, y - VIEWBOX_PADDING, w + 2 * VIEWBOX_PADDING, h + 2 * VIEWBOX_PADDING].join(" "));
+    }
+
+    doc.querySelectorAll("foreignObject").forEach((fo) => {
+      const w = parseFloat(fo.getAttribute("width"));
+      const h = parseFloat(fo.getAttribute("height"));
+      if (!Number.isNaN(w)) fo.setAttribute("width", String(w + FOREIGN_OBJECT_WIDTH_PADDING));
+      if (!Number.isNaN(h)) fo.setAttribute("height", String(h + FOREIGN_OBJECT_HEIGHT_PADDING));
+    });
+
+    return new XMLSerializer().serializeToString(doc);
+  }
+
+  function renderMermaid() {
+    document.querySelectorAll(".mermaid-diagram pre.mermaid").forEach((node) => {
+    const code = node.textContent?.trim();
+    if (!code || code.startsWith("<")) return; // already rendered (SVG) or empty
+    const id = "mermaid-" + Math.random().toString(36).slice(2, 11);
+    mermaid.render(id, code).then(({ svg }) => {
+      node.innerHTML = postProcessSvg(svg);
+    }).catch((err) => {
+      console.error("Mermaid render error:", err);
+      node.innerHTML = `<pre class="text-left text-sm text-red-600 dark:text-red-400">${err.message ?? "Diagram failed to render."}</pre>`;
+    });
+  });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", renderMermaid);
+  } else {
+    renderMermaid();
+  }
+</script>

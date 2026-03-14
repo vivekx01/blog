@@ -22,7 +22,16 @@ The other problem is control. With a naive TTL, you don't get to decide:
 - **Who** refills the cache: every request that misses, or just one?
 - **What** users see during refill: errors, loading spinners, or stale data?
 
-<!-- IMAGE: Simple diagram – app, cache (single TTL clock), DB; all keys expire at the same moment. Path: /blog/system-design/caching-basic-ttl-problem.png -->
+<Mermaid code={`flowchart LR
+  subgraph keys["Same TTL clock"]
+    K1[key 1]
+    K2[key 2]
+    K3[key n]
+  end
+  App[App] --> Cache[Cache]
+  Cache --> keys
+  keys -->|"all expire together"| DB[(Database)]
+`} />
 
 ## How Cache Expiry Causes Traffic Spikes
 
@@ -37,7 +46,24 @@ So the mechanism is:
 
 Next we will discuss the strategies we can use to prevent such issues in our systems.
 
-<!-- IMAGE: Timeline or sequence – many requests, one cache key expires, all arrows hit DB at once (cache stampede). Path: /blog/system-design/caching-expiry-traffic-spike.png -->
+<Mermaid code={`sequenceDiagram
+  participant R1 as Request 1
+  participant R2 as Request 2
+  participant Rn as Request N
+  participant Cache
+  participant DB as Database
+  Note over Cache: Key expired
+  R1->>Cache: get key
+  Cache-->>R1: miss
+  R2->>Cache: get key
+  Cache-->>R2: miss
+  Rn->>Cache: get key
+  Cache-->>Rn: miss
+  R1->>DB: fetch
+  R2->>DB: fetch
+  Rn->>DB: fetch
+  Note over DB: Thundering herd
+`} />
 
 ## TTL Jitter: Adding Randomness to Expiration
 
@@ -56,7 +82,18 @@ Expiry is spread over a window, so the spike is smoothed out and you get fewer s
 
 **What it doesn't fix:** For one hot key, you can still get many requests at once when that key's jittered expiry hits. So jitter is often combined with something like cache locking or a mutex (we'll cover that next) so only one request refills.
 
-<!-- IMAGE: Before/after – left: all keys expire at T; right: expiry spread over T±jitter window (staggered bars or timeline). Path: /blog/system-design/caching-ttl-jitter.png -->
+<Mermaid code={`flowchart LR
+  subgraph before["Without jitter: all expire at T"]
+    B1[key1] --> T1[T]
+    B2[key2] --> T1
+    B3[keyn] --> T1
+  end
+  subgraph after["With jitter: expiry spread"]
+    A1[key1] --> T2[T-30s]
+    A2[key2] --> T3[T]
+    A3[keyn] --> T4[T+30s]
+  end
+`} />
 
 ## Probability-Based Early Expiration
 
@@ -70,7 +107,15 @@ The next strategy, as the name suggests, is **probability-based early expiration
 2. If age is in an "early refresh" window (e.g. the last 1–2 minutes of the TTL), with probability **p** trigger a background refresh before expiry. That's probability-based early expiration, or "early refresh."
 3. You're not forcing every request to refill. You're letting a random subset of requests trigger a refresh before expiry.
 
-<!-- IMAGE: Diagram – request hits cache, with probability p trigger background refresh before TTL; or simple "early refresh window" timeline. Path: /blog/system-design/caching-probabilistic-early-expiry.png -->
+<Mermaid code={`flowchart LR
+  Request[Request] --> Cache[Cache hit]
+  Cache -->|"return immediately"| User[User]
+  Cache -.->|"with probability p"| Backend[Background refresh]
+  Backend -.-> Cache
+  subgraph window["Early refresh window"]
+    W[last 1-2 min of TTL]
+  end
+`} />
 
 ## Mutex / Cache Locking: Preventing Duplicate Recomputation
 
@@ -84,7 +129,29 @@ When a single hot key expires and causes a thundering herd, the real pain is tha
 
 **Tradeoff:** Either latency increases slightly for some requests (if they wait), or users see stale data until the refill completes. In return, the backend sees one refill instead of a stampede.
 
-<!-- IMAGE: Sequence – request 1 gets lock, goes to DB, fills cache; requests 2–N wait or read stale, then get fresh after lock release. Path: /blog/system-design/caching-mutex-lock.png -->
+<Mermaid code={`sequenceDiagram
+  participant R1 as Request 1
+  participant R2 as Request 2
+  participant Rn as Request N
+  participant Lock
+  participant Cache
+  participant DB as Database
+  R1->>Cache: get key
+  Cache-->>R1: miss
+  R1->>Lock: acquire
+  R2->>Lock: try acquire
+  Lock-->>R2: wait
+  Rn->>Lock: try acquire
+  Lock-->>Rn: wait
+  R1->>DB: fetch
+  DB-->>R1: data
+  R1->>Cache: set
+  R1->>Lock: release
+  R2->>Cache: get
+  Cache-->>R2: fresh
+  Rn->>Cache: get
+  Cache-->>Rn: fresh
+`} />
 
 ## Stale-While-Revalidate (SWR)
 
@@ -99,7 +166,14 @@ When the cache entry is expired (or missing), you could block the user until you
 
 **Why use it:** Latency is never compromised. You always serve from cache. You avoid significant spikes because you're not blocking N requests on one refill. Good for UX in read-heavy, user-facing systems where "eventually fresh" is acceptable.
 
-<!-- IMAGE: Flow – return stale from cache immediately, async arrow to backend for revalidate; next request gets fresh. Path: /blog/system-design/caching-stale-while-revalidate.png -->
+<Mermaid code={`flowchart LR
+  Request[Request] --> Cache[Cache]
+  Cache -->|"return stale immediately"| User[User]
+  Cache -.->|"async revalidate"| Backend[Backend]
+  Backend -.-> Cache
+  Next[Next request] --> Cache
+  Cache -->|"fresh (or stale)"| NextUser[User]
+`} />
 
 ## Cache Warming / Pre-Warming
 
@@ -116,7 +190,17 @@ Right after a deploy, or when traffic first hits, the cache is empty. The first 
 
 **Tradeoff:** You do extra work before traffic starts. In return, first requests are fast and you avoid a cold-start spike.
 
-<!-- IMAGE: Timeline – "before traffic" or "post-deploy" phase with cache being filled (keys/entries); then traffic arrives and hits warm cache. Path: /blog/system-design/caching-warming.png -->
+<Mermaid code={`flowchart LR
+  subgraph phase1["Post-deploy / Before traffic"]
+    Job[Warming job] --> Cache[Cache]
+    Job -->|"pre-fill hot keys"| Cache
+  end
+  subgraph phase2["Traffic arrives"]
+    Traffic[Users] --> Cache
+    Cache -->|"cache hit"| Traffic
+  end
+  phase1 --> phase2
+`} />
 
 ## Tradeoffs: Freshness, Latency, and Consistency
 
@@ -128,7 +212,19 @@ No strategy gives you everything. In practice you're balancing three things:
 
 In short: more freshness → more backend load; lower latency → often accept staleness; strong consistency → expensive. Pick the tradeoffs that match your product (e.g. read-heavy UI vs. pricing/inventory).
 
-<!-- IMAGE: Triangle or 3-axis sketch – freshness vs latency vs consistency (or cost); or simple 2x2 "strategy vs tradeoff" matrix. Path: /blog/system-design/caching-tradeoffs-triangle.png -->
+<Mermaid code={`flowchart TB
+  subgraph tradeoffs["Pick your tradeoffs"]
+    F[Freshness]
+    L[Latency]
+    C[Consistency]
+  end
+  F --- L
+  L --- C
+  C --- F
+  F --> FL[more refills\nmore backend load]
+  L --> LL[serve from cache\naccept staleness]
+  C --> CL[strong consistency\n= expensive]
+`} />
 
 ## When to Use Which Strategy
 
@@ -141,7 +237,16 @@ A quick guide:
 
 When in doubt, ask: what happens at expiry? Who refills? What do users see? Then pick the strategy that fixes the worst of those.
 
-<!-- IMAGE: Decision flowchart or table – "High traffic? Same key? → jitter + mutex"; "Read-heavy UI? → SWR"; "Cold start? → warming". Path: /blog/system-design/caching-strategy-decision.png -->
+<Mermaid code={`flowchart TD
+  Start([Start]) --> Q1{High traffic\nsame hot key?}
+  Q1 -->|Yes| Jitter[Jitter + Mutex]
+  Q1 -->|No| Q2{Read-heavy\nuser-facing?}
+  Q2 -->|Yes| SWR[SWR]
+  Q2 -->|No| Q3{Cold start\nor after deploy?}
+  Q3 -->|Yes| Warm[Cache warming]
+  Q3 -->|No| Q4{Smooth load\nbefore expiry?}
+  Q4 -->|Yes| Early[Prob. early expiration]
+`} />
 
 ## Key Takeaways
 
