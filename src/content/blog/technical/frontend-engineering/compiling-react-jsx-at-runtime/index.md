@@ -241,4 +241,3 @@ To address this, the compiled output was **cached and reused** until the source 
 Runtime JSX compilation is possible, but it forces you to think like a **compiler author**, a **security engineer**, and a **React developer** at the same time.
 
 
-
