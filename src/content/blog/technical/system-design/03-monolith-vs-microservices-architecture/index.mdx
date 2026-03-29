@@ -1,0 +1,147 @@
+---
+title: "Monolith vs Microservices: Shapes, Gateways, OAuth, OIDC, and Event-Driven Basics"
+description: "Monolith and microservice fundamentals with pros and cons, how they differ, the role of an API gateway, OAuth vs OpenID Connect, and a concise introduction to event-driven architecture."
+date: "2026-03-29"
+category: "System Design"
+series: "System Design Series"
+seriesOrder: 3
+draft: false
+---
+
+## Introduction
+
+If you read enough job posts and conference talks, it sounds like **microservices** won and **monoliths** are something you “grow out of.” In practice, plenty of successful products stay monolithic for a long time, and plenty of microservice migrations turn into expensive lessons. The useful question isn’t which label sounds modern. It’s what you’re trading away at your current size and what you’re trying to optimize for.
+
+This piece walks through a small bundle of ideas that usually show up together in system design and interviews: **monolith vs microservice** (what they are, pros and cons, and how they differ), the **API gateway** in front of services, **OAuth 2.0** and **OpenID Connect** at a high level, and a **short sketch of event-driven** integration. The goal is a grounded mental model, not a rule that one architecture always wins.
+
+We’ll start with the monolith, because almost everyone begins there whether or not they use the word.
+
+## Monolith: basics
+
+Let’s say you’re building a product as **one application** in **one repo** (or a couple of repos that still ship as a single release). You deploy **one artifact**, or one versioned bundle that always goes out together. The HTTP handlers, business rules, and database access for most features live in the **same process** (or a small number of processes that are treated as one unit). When one module calls another, it’s usually a **function call**, not a network hop. Many teams also keep **one primary database** (or a few databases that the whole team still thinks of as shared). That shape is what people mean by a **monolith**: one deployable boundary, with collaboration happening **in-process**.
+
+**Pros**
+
+- **Simpler to build and run early.** One pipeline, one mental model for “what’s in prod,” and local development that doesn’t depend on a dozen services coming up in the right order. You’re not pretending three folders are “microservices” when they’re really one app.
+- **Easier consistency when data is shared.** If two features need to update related rows, a **single database transaction** can still be on the table. You spend less time at the whiteboard drawing sagas for every small workflow.
+- **Straightforward debugging.** One stack trace, one place to tail logs for a request path, fewer “which service dropped the ball?” moments.
+- **Lower distributed-systems tax at the boundary.** You’re not versioning internal APIs or reasoning about **partial failure** between your own modules the way you do once they’re separate services behind HTTP.
+
+**Cons**
+
+- **Scaling is coarse.** If one part of the app is hot (say, image processing) but the rest is quiet, you often still **scale the whole unit**, unless you’ve split deployments or extracted something later.
+- **Release coupling.** A change in one area can mean **redeploying everything** that ships together. As the team grows, that can mean queues, merge pain, and stepping on the same codebase without clear ownership lines.
+- **The codebase can outgrow the team.** Builds get slower, navigation gets harder, and “who owns this?” gets fuzzy, unless you deliberately carve **modules and boundaries** inside the monolith (sometimes called a **modular monolith**), which buys you structure without splitting the network yet.
+
+## Microservices: basics
+
+**Microservices** split the system into **multiple independently deployable services**, each with a **bounded responsibility** and usually its **own datastore** (or clear data ownership rules). Services talk over the **network** (HTTP/gRPC, async messages, etc.). Teams can own services end-to-end and release on their own cadence, *if* the organization and platform can support that.
+
+**Pros**
+
+- **Independent deploys and scaling:** scale or roll out the piece that needs it.
+- **Team autonomy:** clearer ownership per service when boundaries match the org and domain.
+- **Technology flexibility:** different services can use different stacks where justified (with a cost in diversity).
+
+**Cons**
+
+- **Distributed systems complexity:** latency, timeouts, retries, **partial failures**, and the need for solid **observability** (tracing, metrics, logs).
+- **Data consistency:** no single ACID transaction across arbitrary services; you design for **sagas**, **outbox**, **idempotency**, or **eventual consistency** where appropriate.
+- **Operational overhead:** many pipelines, many runtimes, versioning and **API compatibility** discipline.
+
+## API gateway (in a microservice layout)
+
+An **API gateway** is the **single entry** for external clients (web, mobile, partners) in front of many services. It is not “the microservice architecture” by itself. It is a **component** that often handles:
+
+- **Routing** to the right upstream service (path-based, host-based).
+- **TLS termination**, **rate limiting**, and sometimes **Web Application Firewall**-style concerns.
+- **Authentication** handoff: validating tokens (often **JWT**s from an **IdP**) and attaching identity to requests.
+- **Shared edge behavior** (people often say *cross-cutting*): things many routes need in the same way, done once at the gateway. Examples: **request IDs**, **token checks**, or **normalizing** paths and headers so every service sees a consistent request.
+- **Request shaping:** small fixes to incoming traffic before it hits a service (map `/api/orders` to what the order service expects, drop junk headers, add internal context after auth). This is about **plumbing**, not product rules like discounts or refunds.
+- **Merging a few backend calls** for one client response (for example profile + settings on a single screen). That can cut round trips. Use it **lightly**. If the gateway keeps growing **business logic** (pricing, checkout steps, inventory rules), it becomes a **god gateway**: one overloaded layer that owns too much domain behavior, is hard to test, and hides where the real rules live. Prefer keeping those rules in **services**.
+
+<Mermaid code={`flowchart LR
+  Clients[Clients] --> GW[API Gateway]
+  GW --> A[Service A]
+  GW --> B[Service B]
+  A --> DA[(DB A)]
+  B --> DB[(DB B)]
+`} />
+
+Gateways reduce **client complexity** (one base URL, one TLS config) and centralize **edge policy**. They should stay thin: domain rules usually belong in services, not in the gateway layer.
+
+## Monolith vs microservice: the difference
+
+The core difference is **where the boundary is drawn**:
+
+| Lens | Monolith | Microservices |
+|------|----------|----------------|
+| **Deploy unit** | One (or tightly coupled few) | Many independent services |
+| **Communication** | In-process calls | Network calls + explicit contracts |
+| **Data** | Often shared DB; easier local transactions | Per-service data; cross-service patterns are explicit |
+| **Failure modes** | Process or DB down affects “everything” in that unit | Partial outages; need timeouts, bulkheads, retries with care |
+| **Best when** | Small team, early product, simplicity first | Multiple teams, clear domains, need independent scale/deploy |
+
+Neither is universally “better.” A **well-structured monolith** can outperform a **poorly decomposed microservice** system (sometimes called a **distributed monolith**: all the pain of distribution without the benefits of true independence).
+
+## OAuth 2.0 and OpenID Connect (OIDC)
+
+**OAuth** and **OIDC** are not “monolith vs microservice” choices. They are **standards for identity and access** that show up in **both** shapes. The difference is **how many things need to trust the same proof of identity** once you leave a single deployable.
+
+In a **monolith**, you might still use **sessions** or simple cookies for your own UI, and you may still use **OAuth** when the product needs **delegated access** (for example “Sign in with Google,” or your server calling a third-party API on the user’s behalf). Identity often has **one clear home**: the app and its database.
+
+In a **microservice** layout, the same user hits many **resource servers** (order, profile, billing). You want **one login** and **tokens** that **gateways and services** can validate without each team inventing a custom auth protocol. That is where **OAuth 2.0** and **OIDC** sit in the story from the title: next to **gateways** and **service boundaries**, not instead of them.
+
+**OAuth 2.0** is an **authorization** framework. It answers: *can this client act on this user’s behalf to reach some API?* The usual output is an **access token** sent to a **resource server**. The user does not hand their password to your app for that flow.
+
+**OpenID Connect (OIDC)** adds **authentication** on top of OAuth 2.0. It answers: *who is the user?* It standardizes things like an **ID Token** (often a **JWT**) and **UserInfo**, so “log in” is not reinvented per service.
+
+**Short memory aid:** **OAuth** = **access to resources** (delegation). **OIDC** = **who is logged in** (identity), built on OAuth 2.0.
+
+<Mermaid code={`sequenceDiagram
+  participant U as User
+  participant C as Client app
+  participant IdP as Identity provider
+  participant API as Resource API
+  U->>C: Login
+  C->>IdP: OIDC / OAuth flow
+  IdP-->>C: Tokens (e.g. ID token + access token)
+  C->>API: Request with access token
+  API-->>C: Protected resource
+`} />
+
+## Event-driven architecture (basics)
+
+**A simple story**
+
+A customer places an order. The system must also send email and update stock. You can do that in two broad ways.
+
+**Plan A (synchronous).** The same HTTP request that saves the order also calls the email service and the stock service and waits for them. The browser stays in one long chain: save, then email, then stock, then respond. Easy to picture, but the request gets slower as you add steps, and one slow downstream piece can spoil the whole response.
+
+**Plan B (event-driven).** The order code saves the order, drops a small message like **“order 123 was placed”** on a **queue** (or log), and finishes the HTTP response quickly. Separate workers read that message later and send email, update stock, or run analytics. Those steps are **not** all stacked on the same user click.
+
+That **message about a fact** (“something happened”) is what people call an **event**. The part that writes it is the **producer**. The parts that react later are **consumers**. The **broker** (Kafka, RabbitMQ, a managed queue in the cloud) is just the **middle mailbox** that holds messages until consumers process them.
+
+**Why teams like it**
+
+- Adding a new follow-up step (say fraud scoring) often does not mean changing the original order API; you add another consumer.
+- If email is down, messages can **wait in the queue** instead of failing checkout (within limits).
+- One event can fan out to **many** jobs without the order handler knowing every detail upfront.
+
+**What gets harder**
+
+- Debugging is less “one stack trace.” You trace a **flow across** steps.
+- The same message might run **twice** after retries, so you design handlers to be **safe to repeat** when money or stock is involved.
+- Questions that need an **instant** answer (“did payment pass?”) still belong on a **direct API** call. Most products use **sync calls for the user-facing path** and **events for follow-up work**.
+
+<Mermaid code={`flowchart LR
+  O[Order API] -->|"order placed"| Q[(Queue)]
+  Q --> E[Email worker]
+  Q --> S[Stock worker]
+`} />
+
+**Monolith or microservices:** you can run this pattern **inside one app** (background jobs, internal queues) or **across services**. It is about **how work is handed off**, not only about how many deployables you have.
+
+## Closing thought
+
+**Monolith vs microservices** is about **how you split deployables**; **gateways**, **OAuth/OIDC**, and **events** are separate ideas (one front door, shared login and tokens, async follow-up work) you bring in when your team actually needs them.

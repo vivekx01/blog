@@ -21,5 +21,10 @@ export default defineConfig({
         "@lib": path.resolve(__dirname, "./src/lib"),
       },
     },
+    // Mermaid is large; pinning it here avoids flaky "504 Outdated Optimize Dep" in dev
+    // when Vite's dep cache and the browser get out of sync.
+    optimizeDeps: {
+      include: ["mermaid"],
+    },
   },
 });
