@@ -10,26 +10,26 @@ draft: false
 
 ## Introduction
 
-If you read enough job posts and conference talks, it sounds like **microservices** won and **monoliths** are something you “grow out of.” In practice, plenty of successful products stay monolithic for a long time, and plenty of microservice migrations turn into expensive lessons. The useful question isn’t which label sounds modern. It’s what you’re trading away at your current size and what you’re trying to optimize for.
+If you read enough job posts and conference talks, it sounds like **microservices** won and **monoliths** are something you “grow out of.” In practice, plenty of successful products stay monolithic for a long time, and plenty of microservice migrations turn into expensive lessons. The useful question isn't which label sounds modern. It's what you're trading away at your current size and what you're trying to optimize for.
 
 This piece walks through a small bundle of ideas that usually show up together in system design and interviews: **monolith vs microservice** (what they are, pros and cons, and how they differ), the **API gateway** in front of services, **OAuth 2.0** and **OpenID Connect** at a high level, and a **short sketch of event-driven** integration. The goal is a grounded mental model, not a rule that one architecture always wins.
 
-We’ll start with the monolith, because almost everyone begins there whether or not they use the word.
+We'll start with the monolith, because almost everyone begins there whether or not they use the word.
 
 ## Monolith: basics
 
-Let’s say you’re building a product as **one application** in **one repo** (or a couple of repos that still ship as a single release). You deploy **one artifact**, or one versioned bundle that always goes out together. The HTTP handlers, business rules, and database access for most features live in the **same process** (or a small number of processes that are treated as one unit). When one module calls another, it’s usually a **function call**, not a network hop. Many teams also keep **one primary database** (or a few databases that the whole team still thinks of as shared). That shape is what people mean by a **monolith**: one deployable boundary, with collaboration happening **in-process**.
+Let's say you're building a product as **one application** in **one repo** (or a couple of repos that still ship as a single release). You deploy **one artifact**, or one versioned bundle that always goes out together. The HTTP handlers, business rules, and database access for most features live in the **same process** (or a small number of processes that are treated as one unit). When one module calls another, it's usually a **function call**, not a network hop. Many teams also keep **one primary database** (or a few databases that the whole team still thinks of as shared). That shape is what people mean by a **monolith**: one deployable boundary, with collaboration happening **in-process**.
 
 **Pros**
 
-- **Simpler to build and run early.** One pipeline, one mental model for “what’s in prod,” and local development that doesn’t depend on a dozen services coming up in the right order. You’re not pretending three folders are “microservices” when they’re really one app.
+- **Simpler to build and run early.** One pipeline, one mental model for “what's in prod,” and local development that doesn't depend on a dozen services coming up in the right order. You're not pretending three folders are “microservices” when they're really one app.
 - **Easier consistency when data is shared.** If two features need to update related rows, a **single database transaction** can still be on the table. You spend less time at the whiteboard drawing sagas for every small workflow.
 - **Straightforward debugging.** One stack trace, one place to tail logs for a request path, fewer “which service dropped the ball?” moments.
-- **Lower distributed-systems tax at the boundary.** You’re not versioning internal APIs or reasoning about **partial failure** between your own modules the way you do once they’re separate services behind HTTP.
+- **Lower distributed-systems tax at the boundary.** You're not versioning internal APIs or reasoning about **partial failure** between your own modules the way you do once they're separate services behind HTTP.
 
 **Cons**
 
-- **Scaling is coarse.** If one part of the app is hot (say, image processing) but the rest is quiet, you often still **scale the whole unit**, unless you’ve split deployments or extracted something later.
+- **Scaling is coarse.** If one part of the app is hot (say, image processing) but the rest is quiet, you often still **scale the whole unit**, unless you've split deployments or extracted something later.
 - **Release coupling.** A change in one area can mean **redeploying everything** that ships together. As the team grows, that can mean queues, merge pain, and stepping on the same codebase without clear ownership lines.
 - **The codebase can outgrow the team.** Builds get slower, navigation gets harder, and “who owns this?” gets fuzzy, unless you deliberately carve **modules and boundaries** inside the monolith (sometimes called a **modular monolith**), which buys you structure without splitting the network yet.
 
@@ -88,11 +88,11 @@ Neither is universally “better.” A **well-structured monolith** can outperfo
 
 **OAuth** and **OIDC** are not “monolith vs microservice” choices. They are **standards for identity and access** that show up in **both** shapes. The difference is **how many things need to trust the same proof of identity** once you leave a single deployable.
 
-In a **monolith**, you might still use **sessions** or simple cookies for your own UI, and you may still use **OAuth** when the product needs **delegated access** (for example “Sign in with Google,” or your server calling a third-party API on the user’s behalf). Identity often has **one clear home**: the app and its database.
+In a **monolith**, you might still use **sessions** or simple cookies for your own UI, and you may still use **OAuth** when the product needs **delegated access** (for example “Sign in with Google,” or your server calling a third-party API on the user's behalf). Identity often has **one clear home**: the app and its database.
 
 In a **microservice** layout, the same user hits many **resource servers** (order, profile, billing). You want **one login** and **tokens** that **gateways and services** can validate without each team inventing a custom auth protocol. That is where **OAuth 2.0** and **OIDC** sit in the story from the title: next to **gateways** and **service boundaries**, not instead of them.
 
-**OAuth 2.0** is an **authorization** framework. It answers: *can this client act on this user’s behalf to reach some API?* The usual output is an **access token** sent to a **resource server**. The user does not hand their password to your app for that flow.
+**OAuth 2.0** is an **authorization** framework. It answers: *can this client act on this user's behalf to reach some API?* The usual output is an **access token** sent to a **resource server**. The user does not hand their password to your app for that flow.
 
 **OpenID Connect (OIDC)** adds **authentication** on top of OAuth 2.0. It answers: *who is the user?* It standardizes things like an **ID Token** (often a **JWT**) and **UserInfo**, so “log in” is not reinvented per service.
 

@@ -14,15 +14,15 @@ draft: false
 
 <small>*Image: News18*</small>
 
-Picture a Mumbai local at peak hour. The train pulls in, doors open, and right then hundreds of people rush for the same few doors. Everyone was waiting for that one moment. Everyone moves at once. The doors and the platform become the bottleneck. It’s not that the crowd is so the crowd might be big, but the real issue is they're all hitting the same narrow point at the same time. Chaos, delays, and sometimes worse.
+Picture a Mumbai local at peak hour. The train pulls in, doors open, and right then hundreds of people rush for the same few doors. Everyone was waiting for that one moment. Everyone moves at once. The doors and the platform become the bottleneck. It's not that the crowd is so the crowd might be big, but the real issue is they're all hitting the same narrow point at the same time. Chaos, delays, and sometimes worse.
 
 In systems, the thundering herd is the same idea: many clients or requests “wake up” or react at the same time and hit the same resource: a cache, a database, or a server. All at once. One shared resource, one synchronized moment, and suddenly the system is overloaded. Once you see that pattern, you can start designing around it.
 
 ## What Is the Thundering Herd Problem?
 
-The **thundering herd problem** is when a large number of clients or processes all try to use the same shared resource at the same time. It’s not just “high traffic.” It’s traffic that’s *synchronized*: everyone wakes up, retries, or reacts at once (for example, when a cache entry expires, a lock is released, or a timer fires). They all hit the same bottleneck together. That burst can overload the resource, slow everything down, or take the system down.
+The **thundering herd problem** is when a large number of clients or processes all try to use the same shared resource at the same time. It's not just “high traffic.” It's traffic that's *synchronized*: everyone wakes up, retries, or reacts at once (for example, when a cache entry expires, a lock is released, or a timer fires). They all hit the same bottleneck together. That burst can overload the resource, slow everything down, or take the system down.
 
-The name comes from the idea of a herd of animals stampeding in the same direction. In software, the “herd” is your requests or workers, and the “stampede” is them all going for the same cache, database, or server at once. Once you know what to look for, you’ll see this pattern in caching, databases, load balancers, and more.
+The name comes from the idea of a herd of animals stampeding in the same direction. In software, the “herd” is your requests or workers, and the “stampede” is them all going for the same cache, database, or server at once. Once you know what to look for, you'll see this pattern in caching, databases, load balancers, and more.
 
 
 ## Where It Commonly Occurs

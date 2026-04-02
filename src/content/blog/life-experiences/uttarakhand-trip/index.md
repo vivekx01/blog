@@ -4,7 +4,7 @@ description: "A relaxed Uttarakhand travel story filled with train journeys, hil
 date: "2026-01-26"
 ---
 
-This Uttarakhand trip was not planned with military precision. It was more of a “let’s go, we’ll figure it out” kind of journey, and honestly, that is what made it fun. From long train rides and random conversations to uphill walks that made us question our fitness, this trip had a bit of everything.
+This Uttarakhand trip was not planned with military precision. It was more of a “let's go, we'll figure it out” kind of journey, and honestly, that is what made it fun. From long train rides and random conversations to uphill walks that made us question our fitness, this trip had a bit of everything.
 
 ### Train Journey to Uttarakhand
 

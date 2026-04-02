@@ -1,6 +1,6 @@
 ---
 title: "Compiling React JSX at Runtime: Lessons from a Dynamic Widget System"
-description: "A real-world engineering lesson on what breaks when React’s build-time assumptions disappear, and how compiling JSX at runtime changes the way you think about flexibility, safety, and performance."
+description: "A real-world engineering lesson on what breaks when React's build-time assumptions disappear, and how compiling JSX at runtime changes the way you think about flexibility, safety, and performance."
 date: "2025-12-28"
 ---
 
@@ -138,7 +138,7 @@ Once evaluated, the result was just a function:
 const RuntimeComponent = createComponent(React, useState, useEffect);
 ```
 
-From React’s perspective, this is no different from any other functional component.
+From React's perspective, this is no different from any other functional component.
 
 Rendering was straightforward:
 

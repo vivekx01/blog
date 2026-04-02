@@ -1,0 +1,140 @@
+---
+title: "Apache Kafka: Streams, Topics, and Scaling the Pipeline"
+description: "What Kafka solves when many things happen at once, how streams, topics, partitions, producers, and consumer groups fit together, and why it stays fast, ordered, and durable."
+date: "2026-04-02"
+category: "System Design"
+series: "System Design Series"
+seriesOrder: 4
+draft: false
+---
+
+## Introduction
+
+Modern backends rarely do one thing at a time. Orders, clicks, sensor readings, and background jobs all show up as **events**: things that happened, one after another, sometimes in bursts. If every service called every other service directly, you'd paint a fragile web of timeouts and retries. If you pushed everything through a single database as the only “bus,” that database becomes the bottleneck the moment traffic spikes.
+
+**Apache Kafka** is a system for **moving those events through a shared pipeline** so producers and consumers can stay loosely coupled. This article is a plain-language map of the ideas: what problem it solves, what a **stream** is, how **topics** and **partitions** work, why Kafka is **fast**, what **consumer groups** are, and how Kafka keeps data **safe** and **ordered** without pretending the math is simpler than it is. Kept readable so you can skim and still leave with a working mental model.
+
+## What problem Kafka solves
+
+The core problem is **many things happening at once**, and needing a place to **buffer**, **fan out**, and **replay** that traffic without every caller blocking every callee.
+
+Picture dozens of services writing events and dozens more reading them. If Service A **synchronously** calls Service B for every event, B's slow day becomes A's slow day. If you drop events into a single relational table and poll it, you can scale that table only so far before writes and reads fight each other. Kafka sits in the middle as a **distributed log**: writers append records, readers read at their own pace, and the pipeline can absorb bursts instead of forcing every system to peak at the same second.
+
+It's not magic. It's **decoupling** with a durable buffer: producers don't need to know which consumers exist yet, and consumers can catch up or re-read history depending on how you configure retention. That's the problem space (**high-throughput, many-to-many event plumbing**), not “replace your database.”
+
+## What a message stream means (in simple terms)
+
+A **message stream** is a **sequence of records over time**: new items keep arriving, usually with a timestamp or ordering implied by how they're written. Think of a **conveyor belt** of facts: “payment completed,” “user clicked banner,” “temperature reading 22.1°C.” It's not one question with one answer (like a single HTTP request/response). It's an ongoing feed where **order and volume** matter.
+
+In Kafka, that stream is stored as an **append-only log** per partition (more on partitions soon). Consumers read **forward** through that log, like replaying a tape from a position you choose, rather than deleting messages the moment one worker sees them, though you can build queue-like behavior on top with the right consumer design.
+
+## Kafka as a central message pipeline
+
+**Brokers** are the Kafka servers that hold data and serve clients. **Producers** send records into the cluster; **consumers** read them out. Nothing in that picture requires every microservice to know everyone else's IP address or deploy schedule. They only need to agree on **topic names**, **formats**, and **client settings**.
+
+<Mermaid code={`flowchart LR
+  P1[Producer: orders] --> K[Kafka cluster]
+  P2[Producer: clicks] --> K
+  K --> C1[Consumer: analytics]
+  K --> C2[Consumer: notifications]
+`} />
+
+Kafka acts as the **spine**: one place where streams live, get replicated, and get consumed by many independent readers. That's the “central pipeline” idea: **not** that all business logic lives in Kafka (it doesn't), but that **movement and buffering** of events are centralized so applications can stay simpler at the edges.
+
+## Producers: who sends messages
+
+**Producers** are the clients that **publish** records to Kafka. Usually they're application services, workers, or agents: an order service emitting “order placed,” a log shipper, an IoT gateway.
+
+**What you pass on each send:** at minimum a **topic** name (which stream this belongs to). You can also pass a **key** and sometimes a target **partition**; those control ordering and which slice of the topic gets the message (see **Partitions** below).
+
+**Batching** is a **client-side optimization**. Your code might call `send` very often with tiny messages. The producer library doesn't have to fire one network request per call. It can **buffer** records for a short time or until the buffer is full, then ship **one larger request** with many records inside. Fewer round trips usually means **higher throughput** and less CPU churn. You trade a little **latency** (microseconds to milliseconds of wait) for efficiency.
+
+**Compression** is optional: the library can **shrink** payloads before they go over the wire, which saves bandwidth; both sides agree on a codec (for example Snappy, LZ4, gzip).
+
+**Replicas** are **copies** of your data. Each partition is stored on one broker as the **leader**, and Kafka maintains **follower** replicas on other brokers so a machine failure doesn't wipe the log. That's infrastructure-level duplication, not something you “batch.”
+
+**Acknowledgements** answer: “When does my `send` return **success**?” The leader must accept the write, but you can configure whether the producer waits until **only the leader** has stored it, or until **enough followers** have copied it (**in-sync replicas**). Waiting for more copies is **safer** if a broker dies right after your write; it usually adds a bit of **latency**. The loosest mode is **fire-and-forget** (don't wait for much confirmation): fastest, but you might lose data if the process crashes before replication finishes. So: **stronger durability settings trade latency for safety**; the tuning happens in producer and cluster config, not in “batching replicas” together.
+
+You don't need to know who will consume the event when you produce it. That's the decoupling: **publishers write to the log**; **subscribers** decide what to do later.
+
+## Topics: how messages are grouped
+
+A **topic** is a **named category** of messages: for example `orders`, `user-clicks`, or `inventory-updates`. Producers write **to** a topic; consumers read **from** a topic (or several).
+
+Topics are **not** a single queue in the old sense. They're **logs** split into **partitions** (next section). Many producers can write to the same topic; many consumer groups can read from it **independently** without stealing messages from each other. Each group tracks its own position in the log.
+
+If you're coming from “one queue, one worker,” think instead: **one topic, many ordered logs inside it (partitions), many possible readers.**
+
+## Partitions: why messages are split internally
+
+A topic is divided into **partitions**: numbered, append-only logs. **Each partition is ordered**, but **there is no global order across partitions** for that topic; only per-partition order is guaranteed.
+
+Why split? **Parallelism and scale.** Different partitions can live on different brokers; different consumers in a group can read different partitions at the same time. If one key's traffic is hot, partitioning and keying strategy spread load (when you use a **message key**, Kafka typically hashes it to a fixed partition so all events for the same key stay in order in one place).
+
+<Mermaid code={`flowchart TB
+  T[Topic: orders]
+  T --> P0[Partition 0]
+  T --> P1[Partition 1]
+  T --> P2[Partition 2]
+`} />
+
+**Rule of thumb:** if you need strict ordering for “all events about **this** user,” use a **key** so those events land in the same partition. If you don't care about cross-user order, more partitions let you scale consumption wider.
+
+## Why Kafka is fast and scalable
+
+Kafka's speed comes from a few simple ideas working together:
+
+- **Append-only logs** on disk: writes are mostly **sequential**, which disks and SSDs handle well; you're not doing random seek-heavy updates like a busy OLTP row store for every event.
+- **Batching and compression** on the producer and broker side: many small records become fewer, larger I/O operations.
+- **Operating system page cache**: brokers rely heavily on the OS to keep hot data in memory; **zero-copy** transfer paths (where available) avoid copying bytes through user space more than necessary.
+- **Horizontal scale**: you add **brokers** for more disk and throughput; you add **partitions** to parallelize consumption; you add **consumers** in a group up to the number of partitions (details below).
+
+It's fast for **throughput and fan-out**, not for arbitrary ad-hoc queries. That's still a job for databases and search engines fed **from** Kafka or beside it.
+
+## Consumer groups: what they are
+
+A **consumer group** is a set of consumer processes that **share the work** of reading a topic. They coordinate through Kafka using a **group id**: the cluster treats them as **one logical subscriber**.
+
+Each partition of a topic is read by **at most one consumer in the group at a time**. That assignment is **exclusive** within the group so two members don't process the same partition's messages twice. If you add another consumer **group**, the **same** data can be read independently by that group too, which is often what you want for separate applications.
+
+<Mermaid code={`flowchart LR
+  subgraph topic[Topic partitions]
+    P0[P0]
+    P1[P1]
+    P2[P2]
+  end
+  subgraph group[Consumer group: analytics]
+    C0[Consumer A]
+    C1[Consumer B]
+    C2[Consumer C]
+  end
+  P0 --> C0
+  P1 --> C1
+  P2 --> C2
+`} />
+
+So: **group = team of workers** processing the topic **once** together; **multiple groups** = multiple independent teams each processing the **same** stream for different purposes.
+
+## How work is shared across consumers
+
+Kafka **assigns partitions** to consumers in the group. If you have **three** partitions and **three** consumers, you often get a **one-to-one** split. If you add a fourth consumer while partition count stays three, **one consumer sits idle**: there's nothing left to assign. If you have **fewer** consumers than partitions, some consumers handle **multiple** partitions.
+
+When consumers join, leave, or crash, the group **rebalances**: partitions are **reassigned** so every partition still has exactly one owner in the group. That's powerful for scaling and fault tolerance, but it also means **short periods of movement** during rebalance where you need to design for **idempotent** processing and clean commit of **offsets** (your position in the log).
+
+**Offsets** are how consumers remember where they stopped. Commit **after** you've successfully processed (or use transactions in advanced setups) so a restart doesn't skip or double-apply work in ways your business can't tolerate.
+
+## How Kafka keeps messages safe and ordered
+
+**Ordering** first: Kafka guarantees **order inside a single partition**. If you need a total order for *all* messages in a topic, you'd need **one** partition, which limits parallelism. In practice you choose **partition keys** so everything that must stay ordered shares one partition.
+
+**Safety** comes from **replication**. Each partition has a **leader** broker that handles reads and writes; **followers** copy the data. If the leader fails, a follower can be promoted, subject to your **replication settings** and **minimum in-sync replicas** (a topic for ops tuning, but the idea is simple: don't acknowledge a write until enough copies exist that you won't lose it on one node failure).
+
+**Retention** is how long Kafka **keeps** messages (by time or size). It's not “delete on read”; it's “keep in the log for a window so late or slow consumers can catch up.” **Compaction** is a different mode for some topics where Kafka keeps **the latest record per key**, handy for **changelog**-style topics. Still a specialized pattern, but worth knowing exists.
+
+No system gives you **free** guarantees: stronger durability and stricter ordering usually cost **latency** and **availability** tradeoffs during failures. Kafka makes the tradeoffs **explicit** in configuration; your job is to match them to what the business actually needs.
+
+## Closing thoughts
+
+Kafka fits when you have **lots of events**, **multiple producers and consumers**, and you want a **durable, replayable pipe** between them without turning every integration into synchronous RPC. It's often **overkill** for a small app with a modest queue or a single background worker. Something simpler (a managed queue, a database outbox, or a single-stream tool) may be enough.
+
+If you've read the earlier pieces in this series on **traffic spikes**, **caching**, and **service shapes**, think of Kafka as one way to **absorb and decouple** load between services: not a replacement for careful API design or a database, but a **spine for event flow** when “many things happen at once” is the normal case, not the exception.
