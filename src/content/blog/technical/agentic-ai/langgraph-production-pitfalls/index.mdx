@@ -1,0 +1,290 @@
+---
+title: "What Nobody Tells You About Building Production Agents with LangGraph"
+description: "Things that bit me building production agents with LangGraph"
+date: "2026-04-12"
+category: "Agentic AI"
+series: "Agentic AI"
+seriesOrder: 1
+draft: false
+---
+
+LangGraph is genuinely one of the best tools I've used for building production agentic systems. But when I first started working with it seriously, I made some mistakes that were frustrating enough that I wish someone had just told me upfront.
+
+These aren't theoretical edge cases. Every single one of these happened to me while building real agentic workflows in production. Here's what went wrong and how I fixed it.
+
+---
+
+## 1. Recursive Loops from Bad Routing
+
+This was the first major wall I hit and honestly the most frustrating one.
+
+LangGraph lets you define conditional edges, basically routing logic that decides which node to go to next based on the current state. When this routing is wrong, your graph doesn't fail loudly. It just... keeps running. The agent loops between nodes indefinitely, burning tokens, and you're sitting there watching your logs scroll forever wondering what's happening.
+
+In my case the problem was simple in hindsight: my routing function wasn't handling all possible states. There was a condition I hadn't accounted for, and when the graph hit it, instead of routing to `END` it just bounced back to the start.
+
+**The fix:**
+
+Always make sure your routing function has an explicit fallback that routes to `END`. Treat it like a switch statement: every branch must be handled, including the unexpected ones.
+
+```python
+def route(state: AgentState) -> str:
+    if state["next"] == "tool":
+        return "tool_node"
+    elif state["next"] == "done":
+        return END
+    else:
+        # Always have a fallback
+        return END
+```
+
+Also during development, set `recursion_limit` explicitly so runaway graphs fail fast instead of running forever:
+
+```python
+app.invoke(inputs, config={"recursion_limit": 10})
+```
+
+You'll thank yourself later.
+
+---
+
+## 2. Resuming After an Interrupt and Landing in the Wrong Node
+
+This one is subtle and took me a while to figure out.
+
+LangGraph supports interrupts: you can pause a graph mid-run, wait for human input or approval, and then resume. It's a powerful feature. But if you're not careful about what you store in state before the interrupt, resuming the graph can send it to completely the wrong node and the whole flow falls apart.
+
+What was happening in my case: I was interrupting the graph to wait for user confirmation, but I wasn't storing enough context about *where* we were in the flow and *what* had already happened. When the graph resumed, the routing logic didn't have enough information to make the right decision and it would go off in the wrong direction.
+
+**The fix:**
+
+Before any interrupt, make sure your state has a clear variable that captures what's happening, something like a `status` or `checkpoint` field that your routing logic can rely on when resuming.
+
+```python
+class AgentState(TypedDict):
+    messages: list
+    status: str  # e.g. "awaiting_approval", "approved", "rejected"
+    last_action: str  # what the agent was doing before the interrupt
+```
+
+Then your routing logic after resume has something concrete to work with:
+
+```python
+def route_after_interrupt(state: AgentState) -> str:
+    if state["status"] == "approved":
+        return "execute_node"
+    elif state["status"] == "rejected":
+        return "end_node"
+    else:
+        return "clarify_node"
+```
+
+Think of state as your agent's working memory. Whatever it needs to remember across an interrupt, put it in state explicitly. Don't assume the graph will figure it out.
+
+---
+
+## 3. Dumping Everything Into the LLM Call
+
+This one is less of a crash and more of a slow, expensive, unreliable mess.
+
+When I was first building out the agentic workflows, I was passing the entire state into every LLM call. All the messages, all the context, all the intermediate data. It felt safe. The LLM has everything it could possibly need, right?
+
+Wrong. A few things went wrong with this approach:
+
+- Context windows started filling up fast
+- The LLM would get confused by irrelevant information and produce worse outputs
+- Token costs were way higher than they needed to be
+- Latency was noticeably worse
+
+The fix was obvious once I actually looked at what I was passing. For most of my nodes, only 1-2 fields from state were actually relevant to the task at hand.
+
+**The fix:**
+
+Be surgical about what you pass to the LLM. Build the prompt using only what that specific node actually needs.
+
+```python
+def call_llm(state: AgentState) -> dict:
+    # Bad: passing entire state
+    # response = llm.invoke(str(state))
+
+    # Good: pass only what this node needs
+    relevant_context = {
+        "user_query": state["user_query"],
+        "retrieved_docs": state["retrieved_docs"]
+    }
+    
+    messages = [
+        SystemMessage(content="You are a helpful assistant."),
+        HumanMessage(content=f"Context: {relevant_context['retrieved_docs']}\n\nQuestion: {relevant_context['user_query']}")
+    ]
+    
+    response = llm.invoke(messages)
+    return {"messages": [response]}
+```
+
+Think of each node as a function with a specific job. Give it only the inputs it needs to do that job. Nothing more.
+
+---
+
+## 4. Tool Call Crashes and Message History Trimming Gone Wrong
+
+This one actually has two related parts that both burned me.
+
+**Part 1: Unhandled tool errors crashing the graph**
+
+If a tool call fails and you don't have explicit error handling, LangGraph doesn't gracefully recover; it just crashes. The whole run dies. In production this is not acceptable.
+
+The fix is to always wrap your tool node with error handling and make sure failures route somewhere sensible rather than blowing up:
+
+```python
+def tool_node(state: AgentState) -> dict:
+    try:
+        # execute tool calls
+        result = execute_tools(state["messages"])
+        return {"messages": result}
+    except Exception as e:
+        # Don't crash; return an error message and let the graph decide what to do
+        error_message = ToolMessage(
+            content=f"Tool execution failed: {str(e)}",
+            tool_call_id=get_last_tool_call_id(state["messages"])
+        )
+        return {"messages": [error_message], "status": "tool_error"}
+```
+
+Then your routing logic can handle the `tool_error` status and either retry, fallback, or gracefully end the run.
+
+**Part 2: Trimming message history in the wrong place**
+
+This one is sneaky. When your message history gets long, trimming it makes sense. You don't want to hit context limits. But LangGraph has a strict rule: a `ToolMessage` must always follow an `AIMessage` that contains tool calls. They're a pair.
+
+If you trim your history and accidentally cut an `AIMessage` that has tool calls (leaving only the `ToolMessage`), or cut the `ToolMessage` that follows a tool call, the graph breaks. And the error you get doesn't obviously tell you that this is what happened.
+
+```python
+# This is the dangerous pattern
+messages = state["messages"]
+trimmed = messages[-10:]  # Naive trim; might cut mid tool call sequence
+
+# Safer approach: trim from the start but ensure the first message
+# in your trimmed list is never a dangling ToolMessage
+def safe_trim(messages: list, keep_last: int) -> list:
+    trimmed = messages[-keep_last:]
+    # If the first message is a ToolMessage, keep going back until we find
+    # the AIMessage with the corresponding tool call
+    while trimmed and trimmed[0].type == "tool":
+        keep_last += 1
+        trimmed = messages[-keep_last:]
+    return trimmed
+```
+
+The rule of thumb: never trim in the middle of a tool call sequence. Always trim at clean boundaries.
+
+---
+
+## What I'd Tell Myself Before Starting
+
+LangGraph gives you a lot of power and that power comes with sharp edges. The mistakes above all have one thing in common: I assumed the framework would handle edge cases that I hadn't explicitly coded for. It doesn't. It does exactly what you tell it to do.
+
+State is everything. If your routing logic doesn't have the information it needs, it will make the wrong decision. If your message history isn't clean, the graph will break. If your tools can fail without handling, they will fail without handling.
+
+Be explicit. Be defensive. And add `recursion_limit` in development. Seriously, just do it.
+
+If you're building agentic systems with LangGraph and have hit other painful issues, I'd love to hear about them. Drop a comment or find me on LinkedIn.
+
+---
+
+## 5. Streaming: You Have Less Control Than You Think
+
+This one caught me off guard because the LangGraph docs make streaming sound straightforward.
+
+Here's the thing: if you use `invoke` or `ainvoke` inside a node to call your LLM, the response is buffered. LangGraph waits for the full response before emitting anything from that node. You get no token-by-token streaming out of the box. The node is a black box until it's done.
+
+To actually stream tokens to your frontend you need to use `astream_events` on the compiled graph itself with `stream_mode="messages"`:
+
+```python
+async for event in app.astream_events(inputs, config=config, version="v2"):
+    kind = event["event"]
+    if kind == "on_chat_model_stream":
+        chunk = event["data"]["chunk"]
+        if chunk.content:
+            # This is your token-level stream
+            yield chunk.content
+```
+
+The second thing I learned: once you're streaming, you cannot modify or intercept the data mid-flight inside the node. The chunks come out as-is from the model. If you need to transform the output, you have to do it downstream after the stream is complete, or restructure your graph so the transformation happens in a separate node.
+
+If your architecture requires output transformation mid-stream, plan for that early. Don't assume you can add it later.
+
+---
+
+## 6. Silent Failures from Missing Fields Without Strict Validation
+
+This one is insidious because it doesn't crash. It just silently produces wrong results.
+
+When you're using structured output (asking the LLM to return a specific schema), the model doesn't always comply perfectly. Without strict validation it can skip optional fields, return null where you didn't expect it, or subtly change field names. Your code then proceeds with incomplete data and you spend a long time wondering why downstream behaviour is wrong before tracing it back to a missing field in the LLM response.
+
+The fix is to use Pydantic models with strict mode where your provider supports it:
+
+```python
+from pydantic import BaseModel
+from typing import Optional
+
+class AgentDecision(BaseModel):
+    action: str
+    reasoning: str
+    confidence: float
+    next_step: Optional[str] = None
+
+# For OpenAI models, strict=True enforces the schema at the API level
+structured_llm = llm.with_structured_output(AgentDecision, strict=True)
+```
+
+With `strict=True` on OpenAI models, the API enforces your schema before returning. The model is constrained to only produce valid output. Without it you're trusting the model to behave, which it won't always do especially under load or with complex schemas.
+
+For models where strict mode isn't available, add explicit validation after the call:
+
+```python
+try:
+    result = structured_llm.invoke(messages)
+except ValidationError as e:
+    logger.error(f"LLM returned invalid structure: {e}")
+    # fallback logic here
+```
+
+Don't wait until production to add this. Add it from the start.
+
+---
+
+## 7. `with_structured_output` Hides Token Usage and Is Heavier Than It Looks
+
+This one matters if you care about cost tracking, which in production you absolutely should.
+
+`with_structured_output` is convenient but it's not a thin wrapper. Under the hood it orchestrates schema conversion, function/tool calling, and output parsing: multiple sequential operations. At scale this adds up in latency.
+
+The bigger gotcha: by default `with_structured_output` does not return token usage in the response. If you're tracking costs per run or per user, your usage data will be empty and you'll have no idea why.
+
+Two ways to fix this:
+
+**Option 1: `include_raw=True`**
+
+```python
+structured_llm = llm.with_structured_output(AgentDecision, include_raw=True)
+result = structured_llm.invoke(messages)
+
+parsed = result["parsed"]
+raw_response = result["raw"]
+token_usage = raw_response.usage_metadata
+print(f"Tokens used: {token_usage}")
+```
+
+**Option 2: LangChain callbacks**
+
+```python
+from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+callback = UsageMetadataCallbackHandler()
+result = structured_llm.invoke(messages, config={"callbacks": [callback]})
+print(callback.usage_metadata)
+```
+
+I'd go with `include_raw=True` for most cases: simpler, everything in one place. Use callbacks if you need usage tracking across an entire graph run.
+
+And if latency is critical and you don't strictly need the parsing that `with_structured_output` provides, sometimes it's worth just prompting for JSON and parsing it yourself. Less magic, more control.
