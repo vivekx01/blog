@@ -175,24 +175,31 @@ import { SITE } from "@consts";
 
     if (!modal || !backdrop || !input || !list || !emptyState || !noResults || !trigger) return;
 
-    function isOpen() { return modal.classList.contains("flex"); }
+    // Cast to non-null once so all closures below satisfy TypeScript
+    const m = modal as HTMLElement;
+    const inp = input as HTMLInputElement;
+    const lst = list as HTMLElement;
+    const empty = emptyState as HTMLElement;
+    const noRes = noResults as HTMLElement;
+
+    function isOpen() { return m.classList.contains("flex"); }
 
     function openModal() {
-      modal.classList.remove("hidden");
-      modal.classList.add("flex");
+      m.classList.remove("hidden");
+      m.classList.add("flex");
       document.body.style.overflow = "hidden";
-      input.focus();
+      inp.focus();
       loadIndex();
     }
 
     function closeModal() {
-      modal.classList.add("hidden");
-      modal.classList.remove("flex");
+      m.classList.add("hidden");
+      m.classList.remove("flex");
       document.body.style.overflow = "";
-      input.value = "";
-      list.innerHTML = "";
-      emptyState.classList.remove("hidden");
-      noResults.classList.add("hidden");
+      inp.value = "";
+      lst.innerHTML = "";
+      empty.classList.remove("hidden");
+      noRes.classList.add("hidden");
       activeIdx = -1;
     }
 
@@ -203,10 +210,10 @@ import { SITE } from "@consts";
     }
 
     function renderResults(results: SearchEntry[]) {
-      list.innerHTML = "";
+      lst.innerHTML = "";
       activeIdx = -1;
       if (results.length === 0) return;
-      const query = input.value.trim();
+      const query = inp.value.trim();
       results.forEach((entry) => {
         const li = document.createElement("li");
         li.innerHTML = `
@@ -218,12 +225,12 @@ import { SITE } from "@consts";
             <span class="text-xs text-black/50 dark:text-white/50 truncate">${highlight(entry.description, query)}</span>
           </a>
         `;
-        list.appendChild(li);
+        lst.appendChild(li);
       });
     }
 
     function setActive(idx: number) {
-      const items = list.querySelectorAll<HTMLElement>(".search-result");
+      const items = lst.querySelectorAll<HTMLElement>(".search-result");
       items.forEach((el, i) => {
         el.classList.toggle("bg-black/5", i === idx);
         el.classList.toggle("dark:bg-white/5", i === idx);
@@ -235,26 +242,26 @@ import { SITE } from "@consts";
     trigger.addEventListener("click", openModal, { signal });
     backdrop.addEventListener("click", closeModal, { signal });
 
-    input.addEventListener("input", () => {
-      const query = input.value.trim().toLowerCase();
+    inp.addEventListener("input", () => {
+      const query = inp.value.trim().toLowerCase();
       if (!query) {
-        list.innerHTML = "";
-        emptyState.classList.remove("hidden");
-        noResults.classList.add("hidden");
+        lst.innerHTML = "";
+        empty.classList.remove("hidden");
+        noRes.classList.add("hidden");
         return;
       }
-      emptyState.classList.add("hidden");
+      empty.classList.add("hidden");
       const results = index.filter(e =>
         e.title.toLowerCase().includes(query) ||
         e.description.toLowerCase().includes(query) ||
         e.category.toLowerCase().includes(query)
       );
       renderResults(results);
-      noResults.classList.toggle("hidden", results.length > 0);
+      noRes.classList.toggle("hidden", results.length > 0);
     }, { signal });
 
-    input.addEventListener("keydown", (e) => {
-      const items = list.querySelectorAll<HTMLElement>(".search-result");
+    inp.addEventListener("keydown", (e) => {
+      const items = lst.querySelectorAll<HTMLElement>(".search-result");
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActive(Math.min(activeIdx + 1, items.length - 1));
