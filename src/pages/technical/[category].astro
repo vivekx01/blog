@@ -1,0 +1,136 @@
+---
+import { type CollectionEntry, getCollection } from "astro:content";
+import PageLayout from "@layouts/PageLayout.astro";
+import Container from "@components/Container.astro";
+import ArrowCard from "@components/ArrowCard.astro";
+import BackToPrev from "@components/BackToPrev.astro";
+import { BLOG } from "@consts";
+
+export async function getStaticPaths() {
+  const allPosts = (await getCollection("blog"))
+    .filter(post => !post.data.draft)
+    .filter(post => post.slug.startsWith("technical/"));
+
+  const categoryMap = new Map<string, CollectionEntry<"blog">[]>();
+
+  for (const post of allPosts) {
+    const parts = post.slug.split("/");
+    if (parts.length >= 3) {
+      const categorySlug = parts[1];
+      if (!categoryMap.has(categorySlug)) {
+        categoryMap.set(categorySlug, []);
+      }
+      categoryMap.get(categorySlug)!.push(post);
+    }
+  }
+
+  return Array.from(categoryMap.entries()).map(([categorySlug, posts]) => ({
+    params: { category: categorySlug },
+    props: {
+      posts: posts.sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf()),
+      categoryName: categorySlug.charAt(0).toUpperCase() + categorySlug.slice(1).replace(/-/g, " "),
+    },
+  }));
+}
+
+const { posts, categoryName } = Astro.props;
+const PAGE_SIZE = 10;
+---
+
+<PageLayout title={`${categoryName} | ${BLOG.TITLE}`} description={BLOG.DESCRIPTION}>
+  <Container>
+    <div class="space-y-8">
+      <div class="animate">
+        <BackToPrev href="/blog/technical">
+          Back
+        </BackToPrev>
+      </div>
+
+      <div class="animate flex items-center justify-between">
+        <div class="font-semibold text-black dark:text-white">{categoryName}</div>
+        <span id="result-count" class="text-sm text-black/50 dark:text-white/50">
+          {posts.length} article{posts.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      <ul id="article-list" class="flex flex-col gap-4" data-page-size={PAGE_SIZE}>
+        {posts.map((post) => (
+          <li
+            class="article-item"
+            data-title={post.data.title.toLowerCase()}
+            data-description={post.data.description.toLowerCase()}
+          >
+            <ArrowCard entry={post} />
+          </li>
+        ))}
+      </ul>
+
+      <p id="no-results" class="hidden text-center text-black/50 dark:text-white/50 py-8">
+        No articles found.
+      </p>
+
+      <div id="pagination" class="flex items-center justify-between gap-4 pt-2">
+        <button
+          id="prev-btn"
+          class="px-4 py-2 rounded-lg border border-black/15 dark:border-white/20 text-sm hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors duration-200"
+        >
+          ← Previous
+        </button>
+        <span id="page-info" class="text-sm text-black/50 dark:text-white/50"></span>
+        <button
+          id="next-btn"
+          class="px-4 py-2 rounded-lg border border-black/15 dark:border-white/20 text-sm hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors duration-200"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+  </Container>
+</PageLayout>
+
+<script>
+  const noResults = document.getElementById("no-results")!;
+  const resultCount = document.getElementById("result-count")!;
+  const prevBtn = document.getElementById("prev-btn") as HTMLButtonElement;
+  const nextBtn = document.getElementById("next-btn") as HTMLButtonElement;
+  const pageInfo = document.getElementById("page-info")!;
+  const articleList = document.getElementById("article-list")!;
+  const PAGE_SIZE = parseInt(articleList.dataset.pageSize || "10", 10);
+  const allItems = Array.from(articleList.querySelectorAll<HTMLLIElement>(".article-item"));
+
+  let currentPage = 1;
+
+  function applyPage() {
+    const total = allItems.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    currentPage = Math.min(currentPage, totalPages);
+
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const end = start + PAGE_SIZE;
+
+    allItems.forEach((item, i) => {
+      item.style.display = i >= start && i < end ? "" : "none";
+    });
+
+    noResults.classList.toggle("hidden", total > 0);
+
+    const paginationEl = document.getElementById("pagination")!;
+    paginationEl.style.display = total <= PAGE_SIZE ? "none" : "";
+
+    prevBtn.disabled = currentPage <= 1;
+    nextBtn.disabled = currentPage >= totalPages;
+    pageInfo.textContent = total > 0 ? `Page ${currentPage} of ${totalPages}` : "";
+    resultCount.textContent = `${total} article${total !== 1 ? "s" : ""}`;
+  }
+
+  prevBtn.addEventListener("click", () => {
+    if (currentPage > 1) { currentPage--; applyPage(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  });
+
+  nextBtn.addEventListener("click", () => {
+    const totalPages = Math.ceil(allItems.length / PAGE_SIZE);
+    if (currentPage < totalPages) { currentPage++; applyPage(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  });
+
+  applyPage();
+</script>

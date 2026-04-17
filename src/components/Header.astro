@@ -13,6 +13,20 @@ import { SITE } from "@consts";
     align-items: center;
     justify-content: center;
   }
+
+  #search-results::-webkit-scrollbar {
+    width: 4px;
+  }
+  #search-results::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  #search-results::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.15);
+    border-radius: 2px;
+  }
+  .dark #search-results::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.15);
+  }
 </style>
 
 <header>
@@ -23,7 +37,22 @@ import { SITE } from "@consts";
           {SITE.NAME}
         </div>
       </Link>
-      <div class="flex flex-wrap gap-1 items-center">
+      <div class="flex flex-wrap gap-2 items-center">
+
+        <button
+          id="search-trigger"
+          type="button"
+          aria-label="Search"
+          class="group flex items-center gap-2 px-3 h-8 rounded-full border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/5 transition-colors duration-200"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-3.5 fill-none stroke-current stroke-2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <span class="text-xs text-black/40 dark:text-white/40 hidden sm:inline">Search</span>
+          <kbd class="hidden sm:inline text-xs text-black/30 dark:text-white/30 font-mono">⌘K</kbd>
+        </button>
+
         <button
           id="theme-toggle-button"
           type="button"
@@ -31,18 +60,7 @@ import { SITE } from "@consts";
           class="theme-toggle group size-8 flex items-center justify-center rounded-full"
         >
           <span class="theme-icon current" data-theme="light" aria-hidden="true">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="group-hover:stroke-black group-hover:dark:stroke-white transition-colors duration-300 ease-in-out"
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="group-hover:stroke-black group-hover:dark:stroke-white transition-colors duration-300 ease-in-out">
               <circle cx="12" cy="12" r="5"></circle>
               <line x1="12" y1="1" x2="12" y2="3"></line>
               <line x1="12" y1="21" x2="12" y2="23"></line>
@@ -55,34 +73,213 @@ import { SITE } from "@consts";
             </svg>
           </span>
           <span class="theme-icon" data-theme="dark" aria-hidden="true">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="group-hover:stroke-black group-hover:dark:stroke-white transition-colors duration-300 ease-in-out"
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="group-hover:stroke-black group-hover:dark:stroke-white transition-colors duration-300 ease-in-out">
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
             </svg>
           </span>
         </button>
+
       </div>
-      <!-- <nav class="flex gap-1">
-        <Link href="/blog/technical">
-          Technical
-        </Link>
-        <span>
-          {`/`}
-        </span>
-        <Link href="/blog/life-experiences">
-          Life Experiences
-        </Link>
-      </nav> -->
     </div>
   </Container>
 </header>
+
+<!-- Search Modal — hidden by default via Tailwind -->
+<div
+  id="search-modal"
+  class="hidden fixed inset-0 z-50 items-start justify-center pt-[15vh] px-4"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Search"
+>
+  <!-- Backdrop -->
+  <div id="search-backdrop" class="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm"></div>
+
+  <!-- Dialog -->
+  <div class="relative w-full max-w-lg bg-white dark:bg-neutral-900 rounded-xl shadow-2xl border border-black/10 dark:border-white/10 overflow-hidden">
+
+    <div class="flex items-center gap-3 px-4 border-b border-black/10 dark:border-white/10">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="size-4 shrink-0 fill-none stroke-current stroke-2 text-black/40 dark:text-white/40">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+      <input
+        id="search-input"
+        type="text"
+        placeholder="Search articles..."
+        autocomplete="off"
+        spellcheck="false"
+        class="flex-1 py-4 bg-transparent text-black dark:text-white placeholder-black/30 dark:placeholder-white/30 focus:outline-none text-sm"
+      />
+      <kbd class="hidden sm:inline text-xs text-black/30 dark:text-white/30 font-mono border border-black/10 dark:border-white/10 rounded px-1.5 py-0.5 shrink-0">
+        esc
+      </kbd>
+    </div>
+
+    <div id="search-results" class="max-h-[60vh] overflow-y-auto overscroll-contain">
+      <div id="search-empty" class="py-12 text-center text-sm text-black/40 dark:text-white/40">
+        Start typing to search...
+      </div>
+      <div id="search-no-results" class="hidden py-12 text-center text-sm text-black/40 dark:text-white/40">
+        No results found.
+      </div>
+      <ul id="search-list" class="p-2"></ul>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  type SearchEntry = {
+    title: string;
+    description: string;
+    href: string;
+    category: string;
+    date: string;
+  };
+
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+  // Persists across navigations — fetched once per session
+  let index: SearchEntry[] = [];
+  let loaded = false;
+  let activeIdx = -1;
+
+  async function loadIndex() {
+    if (loaded) return;
+    loaded = true;
+    try {
+      const res = await fetch(`${BASE}/search-index.json`);
+      index = await res.json();
+    } catch {
+      loaded = false;
+    }
+  }
+
+  // Re-runs after every View Transition swap to rebind fresh DOM elements
+  let cleanup = new AbortController();
+
+  function init() {
+    // Cancel listeners from the previous page's DOM
+    cleanup.abort();
+    cleanup = new AbortController();
+    const signal = cleanup.signal;
+
+    const modal = document.getElementById("search-modal");
+    const backdrop = document.getElementById("search-backdrop");
+    const input = document.getElementById("search-input") as HTMLInputElement | null;
+    const list = document.getElementById("search-list");
+    const emptyState = document.getElementById("search-empty");
+    const noResults = document.getElementById("search-no-results");
+    const trigger = document.getElementById("search-trigger");
+
+    if (!modal || !backdrop || !input || !list || !emptyState || !noResults || !trigger) return;
+
+    function isOpen() { return modal.classList.contains("flex"); }
+
+    function openModal() {
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      document.body.style.overflow = "hidden";
+      input.focus();
+      loadIndex();
+    }
+
+    function closeModal() {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      document.body.style.overflow = "";
+      input.value = "";
+      list.innerHTML = "";
+      emptyState.classList.remove("hidden");
+      noResults.classList.add("hidden");
+      activeIdx = -1;
+    }
+
+    function highlight(text: string, query: string) {
+      if (!query) return text;
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return text.replace(new RegExp(`(${escaped})`, "gi"), "<mark class=\"bg-yellow-200 dark:bg-yellow-700 rounded-sm\">$1</mark>");
+    }
+
+    function renderResults(results: SearchEntry[]) {
+      list.innerHTML = "";
+      activeIdx = -1;
+      if (results.length === 0) return;
+      const query = input.value.trim();
+      results.forEach((entry) => {
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <a href="${BASE}${entry.href}" class="search-result flex flex-col gap-0.5 px-3 py-3 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-colors duration-150 cursor-pointer block">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-medium text-sm text-black dark:text-white truncate">${highlight(entry.title, query)}</span>
+              <span class="text-xs text-black/40 dark:text-white/40 shrink-0">${entry.category}</span>
+            </div>
+            <span class="text-xs text-black/50 dark:text-white/50 truncate">${highlight(entry.description, query)}</span>
+          </a>
+        `;
+        list.appendChild(li);
+      });
+    }
+
+    function setActive(idx: number) {
+      const items = list.querySelectorAll<HTMLElement>(".search-result");
+      items.forEach((el, i) => {
+        el.classList.toggle("bg-black/5", i === idx);
+        el.classList.toggle("dark:bg-white/5", i === idx);
+      });
+      activeIdx = idx;
+      if (idx >= 0) items[idx]?.scrollIntoView({ block: "nearest" });
+    }
+
+    trigger.addEventListener("click", openModal, { signal });
+    backdrop.addEventListener("click", closeModal, { signal });
+
+    input.addEventListener("input", () => {
+      const query = input.value.trim().toLowerCase();
+      if (!query) {
+        list.innerHTML = "";
+        emptyState.classList.remove("hidden");
+        noResults.classList.add("hidden");
+        return;
+      }
+      emptyState.classList.add("hidden");
+      const results = index.filter(e =>
+        e.title.toLowerCase().includes(query) ||
+        e.description.toLowerCase().includes(query) ||
+        e.category.toLowerCase().includes(query)
+      );
+      renderResults(results);
+      noResults.classList.toggle("hidden", results.length > 0);
+    }, { signal });
+
+    input.addEventListener("keydown", (e) => {
+      const items = list.querySelectorAll<HTMLElement>(".search-result");
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive(Math.min(activeIdx + 1, items.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive(Math.max(activeIdx - 1, 0));
+      } else if (e.key === "Enter" && activeIdx >= 0) {
+        e.preventDefault();
+        (items[activeIdx].closest("a") as HTMLAnchorElement)?.click();
+      } else if (e.key === "Escape") {
+        closeModal();
+      }
+    }, { signal });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        isOpen() ? closeModal() : openModal();
+      }
+      if (e.key === "Escape" && isOpen()) {
+        closeModal();
+      }
+    }, { signal });
+  }
+
+  document.addEventListener("astro:after-swap", init);
+  init();
+</script>

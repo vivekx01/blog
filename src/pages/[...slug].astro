@@ -29,25 +29,12 @@ let backLabel: string;
 
 if (slugParts.length <= 1) {
   backHref = "/blog";
-  backLabel = "Back to Blog";
-} else if (slugParts.length === 2) {
-  backHref = `/${coll}/${slugParts[0]}`;
-  backLabel =
-    slugParts[0] === "technical"
-      ? "Back to Technical Writings"
-      : slugParts[0] === "life-experiences"
-        ? "Back to Life Experiences"
-        : "Back";
-} else if (slugParts[0] === "technical") {
-  backHref = `/${coll}/technical#${slugParts[1]}`;
-  backLabel = "Back";
+} else if (slugParts[0] === "technical" && slugParts.length >= 3) {
+  backHref = `/${coll}/technical/${slugParts[1]}`;
 } else {
   backHref = `/${coll}/${slugParts[0]}`;
-  backLabel =
-    slugParts[0] === "life-experiences"
-      ? "Back to Life Experiences"
-      : "Back";
 }
+backLabel = "Back";
 ---
 
 <PageLayout title={post.data.title} description={post.data.description}>

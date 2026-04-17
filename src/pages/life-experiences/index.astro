@@ -10,21 +10,22 @@ const data = (await getCollection("blog"))
   .filter(post => !post.data.draft)
   .filter(post => post.slug.startsWith("life-experiences/"))
   .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
-  
+
 type Acc = {
   [year: string]: CollectionEntry<"blog">[];
 }
 
 const posts = data.reduce((acc: Acc, post) => {
-    const year = post.data.date.getFullYear().toString();
-    if (!acc[year]) {
-      acc[year] = [];
-    }
-    acc[year].push(post);
-    return acc;
-  }, {});
+  const year = post.data.date.getFullYear().toString();
+  if (!acc[year]) {
+    acc[year] = [];
+  }
+  acc[year].push(post);
+  return acc;
+}, {});
 
-const years = Object.keys(posts).sort((a, b) => parseInt(b) - parseInt(a)); 
+const years = Object.keys(posts).sort((a, b) => parseInt(b) - parseInt(a));
+const latestYear = years[0];
 ---
 
 <PageLayout title={BLOG.TITLE} description={BLOG.DESCRIPTION}>
@@ -32,32 +33,44 @@ const years = Object.keys(posts).sort((a, b) => parseInt(b) - parseInt(a));
     <div class="space-y-10">
       <div class="animate">
         <BackToPrev href={import.meta.env.BASE_URL}>
-          Back to Home
+          Back
         </BackToPrev>
       </div>
       <div class="animate font-semibold text-black dark:text-white">
         Life Experiences
       </div>
-      <div class="space-y-4">
+
+      <div id="year-groups" class="space-y-2">
         {years.map(year => (
-          <section class="animate space-y-4">
-            <div class="font-semibold text-black dark:text-white">
-              {year}
-            </div>
-            <div>
-              <ul class="flex flex-col gap-4">
-                {
-                  posts[year].map((post) => (
-                    <li>
-                      <ArrowCard entry={post}/>
-                    </li>
-                  ))
-                }
-              </ul>
-            </div>
-          </section>
+          <details open={year === latestYear} class="animate group">
+            <summary class="flex items-center justify-between cursor-pointer list-none py-2 border-b border-black/10 dark:border-white/10 select-none">
+              <span class="font-semibold text-black dark:text-white">{year}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-black/40 dark:text-white/40">{posts[year].length} post{posts[year].length !== 1 ? "s" : ""}</span>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  class="size-4 stroke-2 fill-none stroke-current transition-transform duration-200 group-open:rotate-180"
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </div>
+            </summary>
+            <ul class="flex flex-col gap-4 pt-4 pb-2">
+              {posts[year].map((post) => (
+                <li
+                  class="article-item"
+                  data-title={post.data.title.toLowerCase()}
+                  data-description={post.data.description.toLowerCase()}
+                >
+                  <ArrowCard entry={post} />
+                </li>
+              ))}
+            </ul>
+          </details>
         ))}
       </div>
+
     </div>
   </Container>
 </PageLayout>
