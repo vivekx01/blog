@@ -1,0 +1,211 @@
+---
+title: "Kafka Partition Skew: Hot Keys, Starvation, and How to Fix Them"
+description: "Why Kafka partitions become unequal, what happens when one partition hogs all the work, and the concrete strategies teams use to fix hot keys, rebalance load, and prevent consumer starvation."
+date: "2026-04-19"
+category: "System Design"
+series: "System Design Series"
+seriesOrder: 5
+draft: false
+---
+
+## Introduction
+
+In the [previous article](/blog/technical/system-design/04-apache-kafka) we covered how Kafka uses **partitions** to scale: split a topic into numbered logs, assign each partition to a consumer, and you get parallelism for free. The model works beautifully when messages are spread evenly. But what happens when they're not?
+
+One partition gets ten times the volume of the others. One consumer can't keep up. The rest sit idle waiting. Lag builds on that single hot partition while the others are nearly empty. That's **partition skew**. In a production system it quietly kills throughput, delays processing, and sometimes causes outages that look mysterious until you check the partition metrics.
+
+This article is about why it happens, what the failure modes look like, and the concrete strategies you can reach for to fix it.
+
+## Why skew happens: the key problem
+
+Kafka routes messages to partitions using a **message key**. The default behavior is: hash the key, mod by the number of partitions, land on that partition. That's deterministic and keeps all events for a given key in order in one place, which is often exactly what you want.
+
+The problem starts when your **key distribution is not uniform**. Real-world data almost never is.
+
+<Mermaid code={`flowchart LR
+  P[Producer]
+  P -->|key=user_1| Part0[Partition 0 🔥 heavy]
+  P -->|key=user_2| Part0
+  P -->|key=user_3| Part0
+  P -->|key=user_7| Part1[Partition 1 quiet]
+  P -->|key=user_9| Part2[Partition 2 quiet]
+`} />
+
+Examples of naturally skewed keys:
+- **User ID**: a power user or a bot generates orders of magnitude more events than average users
+- **Tenant ID** in multi-tenant SaaS: a large enterprise customer produces far more events than a small one
+- **Geographic region**: "US-East" might carry 60% of all traffic
+- **Event type**: a `page_view` event might outnumber `purchase` events 10,000:1 but share a topic with the same key scheme
+- **Null keys**: if producers don't set a key, the Kafka client library sends to a **single partition** by default (older clients) or round-robins, depending on version and config
+
+The partition that absorbs all that traffic is called a **hot partition**. The consumer assigned to it becomes the **hot consumer**, overwhelmed, falling behind, unable to catch up.
+
+## What starvation looks like in practice
+
+Starvation is the consumer-side effect of partition skew. The consumer on the hot partition is:
+
+- **Maxing out CPU** deserializing, processing, and committing offsets
+- **Building lag**: its committed offset falls behind the latest offset on the broker faster than it can read
+- **Blocking other topics**: if this consumer handles multiple topic partitions in the same thread pool, the slow hot partition can starve processing of unrelated partitions
+
+Meanwhile, consumers on the quiet partitions are sitting nearly idle, polling every few milliseconds, finding nothing, sleeping, polling again. You have one worker drowning and ten workers scrolling their phones.
+
+The dangerous part: **Kafka's consumer group rebalancing won't help you here**. Rebalancing redistributes which consumer owns which partition. If the imbalance is in the *data*, not in the *number of consumers vs partitions*, moving partition ownership just moves the problem to a different worker.
+
+<Mermaid code={`flowchart TB
+  subgraph topic[Topic: events - 3 partitions]
+    P0[Partition 0\n lag: 2,000,000]
+    P1[Partition 1\n lag: 300]
+    P2[Partition 2\n lag: 150]
+  end
+  subgraph group[Consumer group]
+    C0[Consumer A 🔥 drowning]
+    C1[Consumer B idle]
+    C2[Consumer C idle]
+  end
+  P0 --> C0
+  P1 --> C1
+  P2 --> C2
+`} />
+
+## Strategy 1: Redesign the key
+
+The cleanest fix is to **choose a better partition key**, one whose values are more uniformly distributed across your event volume.
+
+If you're currently keying on `tenant_id` and one tenant dominates, consider keying on something more granular: `tenant_id + user_id`, or `tenant_id + session_id`. The more fine-grained the key, the more partitions it can hash into, and the flatter your distribution gets.
+
+Watch out for the tradeoff: **you lose ordering guarantees for the coarser grouping**. If business logic requires "all events for a tenant in order," splitting the key breaks that. If you only need "all events for a user session in order," splitting to session-level key is safe.
+
+**When to use this:** you're in early design or can afford a producer-side change. It's the lowest-overhead solution: no new infrastructure, no complex logic.
+
+## Strategy 2: Add a random salt to hot keys
+
+If you can't change the logical key, you can **append a random suffix** to artificially spread a hot key across multiple partitions:
+
+```
+actual_key = "big_tenant_id"
+salted_key = "big_tenant_id_" + random(0, N)   # N = number of virtual sub-partitions
+```
+
+Messages for the same logical key now spread across N partitions instead of landing on one. This eliminates the hot partition.
+
+The catch: **you lose ordering for that key**. Two events for `big_tenant_id` might land in different partitions and be processed by different consumers in arbitrary order. Whether that matters depends on your processing logic.
+
+A refinement: **time-based salting**. Instead of fully random, use a timestamp bucket:
+
+```
+salted_key = "big_tenant_id_" + (unix_timestamp / 60)   # same bucket per minute
+```
+
+Within a minute, events for the same key stay in the same partition (ordered). After a minute-boundary, they might shift. This is useful when you only need short-window ordering.
+
+**Consumers need to know about the salt** if they want to re-aggregate events per logical key. They strip the suffix and group by the real key. This adds consumer complexity in exchange for producer-side load balancing.
+
+## Strategy 3: Increase partition count
+
+If your key space is genuinely diverse but you just have too few partitions, adding more partitions gives the hash function more buckets to spread load across.
+
+```
+Before: 6 partitions, 3 hot
+After:  24 partitions, load spreads over 12, each consumer handles fewer hot partitions
+```
+
+This works well when skew is moderate rather than extreme. If one key literally generates 80% of traffic, more partitions won't help. That 80% still hashes to the same single partition. But if the top-10 keys each generate 5-10% of traffic, spreading those across 24 partitions instead of 6 means each consumer sees a more balanced mix.
+
+**Important caveat:** Kafka does not let you reduce the number of partitions after creation. Adding partitions is a one-way door. It also triggers a **rebalance** across all consumer groups, which can cause processing gaps. Plan partition count at design time whenever possible, erring toward more rather than fewer.
+
+**Rule of thumb:** target a partition count of 2-3x your peak consumer count, to leave headroom for future scaling.
+
+## Strategy 4: Custom partitioner
+
+Kafka producers accept a **custom partitioner**, a function you write that maps a message key to a partition number. The default is a hash function; yours can be anything.
+
+One common pattern is **weighted partitioning**: you maintain a config or registry of known-hot keys and assign them to their own dedicated partitions, while all other keys share the remaining partitions.
+
+```
+partitions 0-3:  reserved for big_tenant_id (spreads their traffic across 4 partitions)
+partitions 4-19: all other tenants hash normally into this range
+```
+
+This is more operational work: you need to know which keys are hot, update the config when they change, and ensure your consumers are set up to handle the asymmetry. But it gives you precise control over where traffic lands.
+
+<Mermaid code={`flowchart LR
+  P[Producer with custom partitioner]
+  P -->|big_tenant → 0,1,2,3 round-robin| Part0[P0]
+  P --> Part1[P1]
+  P --> Part2[P2]
+  P --> Part3[P3]
+  P -->|everyone else → hash| Part4[P4...P19]
+`} />
+
+## Strategy 5: Pre-aggregate before producing
+
+Sometimes the right answer isn't to fix the partition. It's to **reduce message volume** before it even hits Kafka.
+
+If a single source is emitting thousands of raw events per second for the same logical key, you can aggregate them at the producer side: batch up a window of events, emit one summary record with counts or merged state.
+
+```
+Before: 10,000 individual page_view events/sec for user_id=bot123 → Kafka → overwhelmed consumer
+After:  one record per 5s: { user_id: bot123, page_view_count: 50,000, window: 5s } → Kafka → normal consumer
+```
+
+This doesn't make sense for every use case. Sometimes you need every raw event. But for metrics, analytics, and audit trails that tolerate bucketing, producer-side windowing is the most scalable path. Fewer messages means less network, less disk, and far less partition pressure.
+
+## Strategy 6: Separate hot keys into their own topic
+
+If one category of key is consistently hot and has different processing semantics, give it **its own topic** with its own partition strategy and consumer group.
+
+```
+topic: events_standard        → normal tenant events, 12 partitions, 12 consumers
+topic: events_enterprise_bigco → bigco's traffic, 8 dedicated partitions, 8 consumers
+```
+
+This is operationally heavier (producers need to route to the right topic, you manage more topics), but it gives you **independent scaling**. You can tune partition count, retention, consumer concurrency, and SLAs per topic independently. A hot enterprise customer doesn't starve everyone else.
+
+Many teams arrive at this naturally by treating "event type" as a topic-level concern anyway (`orders`, `page_views`, `inventory_updates`), and the same logic applies to hot keys.
+
+## Detecting skew before it's a crisis
+
+The tricky thing about partition skew is it often develops gradually. A customer grows, a bot appears, a key distribution shifts. You only notice when lag has built to the point where it's already affecting downstream systems.
+
+**Metrics to watch:**
+
+- **Consumer lag per partition**: not just total lag, but broken down. A flat total can hide one partition at 2M lag and others at zero.
+- **Messages in per partition per second**: should be reasonably flat across partitions for a healthy topic. Spikes on one partition are the first signal.
+- **Consumer poll duration / processing latency**: if one consumer instance is consistently slower than peers in the same group, it's likely handling a hot partition.
+- **CPU and network per consumer instance**: same asymmetry signal.
+
+Most Kafka monitoring tools (Kafka's JMX metrics, Confluent Control Center, Cruise Control, Burrow, Grafana dashboards) expose per-partition metrics. Set alerts on partition lag divergence, not just topic-level totals.
+
+## The starvation cascade
+
+One subtle failure mode worth naming: hot partition starvation can **cascade** through your system.
+
+Consumer lag on the hot partition means downstream services receive events late. If those events drive time-sensitive logic (fraud checks, inventory holds, notification windows), delays compound. SLAs slip. Business logic that assumes near-real-time delivery starts making wrong decisions on stale state.
+
+Worse: if you have a **consumer that reads multiple topics** (not uncommon), a hot partition on one topic can starve all topics that consumer handles. The poll loop is blocked processing the backlog; other topics don't get polled; their offsets don't get committed; their lag grows even though the *data* volume on those topics is perfectly normal.
+
+This is why partition skew is one of those problems that looks like a mystery. "Why is service X suddenly slow? It's barely getting any messages." The actual bottleneck is upstream, on a different topic, in the same consumer instance.
+
+## Choosing a strategy
+
+No single fix works for every case:
+
+| Situation | Best starting point |
+|---|---|
+| You control the producer and key design | Redesign the key |
+| Hot key is known and predictable | Custom partitioner or dedicated topic |
+| Hot key varies or is a single known offender | Salt the key |
+| Many moderately hot keys | More partitions |
+| Volume is the real issue, not skew | Pre-aggregate at the producer |
+| Completely different SLAs needed | Separate topic |
+
+Teams often layer multiple strategies: design a reasonable key upfront, set partition count higher than you think you need, monitor per-partition lag from day one, and reach for a dedicated topic or custom partitioner when a specific key turns hot at scale.
+
+## Closing thoughts
+
+Kafka's partition model is powerful precisely because it makes parallelism explicit. But that same model means **data distribution is your responsibility**, not Kafka's. The broker will faithfully put every message for a given hash into the same partition and won't second-guess you when that hash bucket turns into a firehose.
+
+Monitor per-partition lag, not just topic lag. Design your key with distribution in mind, not just ordering needs. And when a hot key appears, reach for the strategy that fits your ordering requirements and operational tolerance (salt it, split it, or isolate it) before the lag builds into a production incident.
+
+Partition skew is one of those problems that's easy to dismiss early ("it's fine, the consumer will catch up") and expensive to fix late ("why is the entire pipeline backed up by 20 minutes?"). The earlier you instrument it, the easier it is to handle.

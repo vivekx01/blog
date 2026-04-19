@@ -93,6 +93,8 @@ const { code } = Astro.props;
   });
   }
 
+  document.addEventListener("astro:after-swap", renderMermaid);
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", renderMermaid);
   } else {

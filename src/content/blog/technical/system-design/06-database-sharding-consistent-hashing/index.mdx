@@ -1,0 +1,252 @@
+---
+title: "Database Sharding and Consistent Hashing"
+description: "Why a single database eventually stops being enough, how sharding splits data across multiple nodes, and why consistent hashing is the elegant solution to the painful problem of adding or removing shards."
+date: "2026-04-19"
+category: "System Design"
+series: "System Design Series"
+seriesOrder: 6
+draft: false
+---
+
+## Introduction
+
+At some point, a single database stops being enough. It's not a hypothetical. It's a transition every successful product eventually has to navigate. Writes pile up faster than one machine can handle. The table you're querying has 800 million rows and even the best index can only do so much. You've added read replicas, tuned queries, added caching, and the bottleneck is still the primary node.
+
+The next step is **sharding**: splitting your data across multiple database nodes so each one holds a subset. More nodes means more total write capacity, more total storage, and queries that only touch one shard avoid touching the rest.
+
+But sharding introduces a hard problem: how do you decide which node holds which data? And what happens when you need to add or remove a node? **Consistent hashing** answers the second question. It's a technique that keeps the mapping between data and nodes stable even as the cluster changes.
+
+This article covers both: why sharding works, how naive approaches fail, and why consistent hashing is the elegant fix.
+
+## Why a single node breaks down
+
+A single database node has limits on:
+
+- **Write throughput**: one CPU handling all transactions, one disk absorbing all writes
+- **Storage**: eventually you run out, and vertical scaling (bigger machine) has a ceiling and is expensive
+- **Query parallelism**: even with connection pooling, there's only so much concurrent processing one node does well
+- **Hot data**: a single table that receives 90% of writes is a contention magnet
+
+Read replicas help with read throughput, but they don't help with write pressure: all writes still go to the primary. At high scale you need to split the **write load** itself.
+
+Sharding does that by giving each shard ownership of a portion of the data. Writes for a record go to the specific shard that owns it. No shard sees everything; each shard sees its slice.
+
+<Mermaid code={`flowchart TB
+  App[Application]
+  App -->|write user_id=1| S1[Shard 1\n users 1–10M]
+  App -->|write user_id=15M| S2[Shard 2\n users 10M–20M]
+  App -->|write user_id=28M| S3[Shard 3\n users 20M–30M]
+`} />
+
+## How sharding works: the partition key
+
+The foundation of sharding is the **partition key** (also called the shard key): the field in your data you use to decide which shard a record belongs to. Everything else follows from this choice.
+
+Good partition keys are:
+- **High cardinality**: many possible values so data distributes broadly
+- **Evenly distributed**: no single value dominates the dataset
+- **Frequently used in queries**: so most queries know which shard to hit without scatter-gathering across all shards
+- **Stable**: changing a partition key value means moving the record to a different shard, which is expensive
+
+Common choices: `user_id`, `account_id`, `order_id`. Poor choices: `status` (low cardinality), `country` (skewed), `created_at` (hotspot writes always go to the latest shard).
+
+## Naive approach: modulo hashing
+
+The simplest approach to mapping a partition key to a shard is **modulo arithmetic**:
+
+```
+shard_index = hash(partition_key) % num_shards
+```
+
+Hash the key, mod by the number of shards, and you get a shard index. Simple, deterministic, and fast. It works perfectly until you need to **change the number of shards**.
+
+Say you have 4 shards and decide to add a 5th to handle growing traffic. Now:
+
+```
+shard_index = hash(key) % 5
+```
+
+Almost **every key maps to a different shard**. The key that was on shard 2 is now on shard 3. The key that was on shard 0 is now on shard 4. You have to migrate nearly all your data to bring the new layout into effect. For a database with hundreds of gigabytes or terabytes, this is a painful, slow, risky operation.
+
+Remove a shard for maintenance? Same problem. The mod changes, and keys scatter.
+
+This is **rehashing**. With naive modulo hashing, adding or removing a node causes rehashing for roughly `(N-1)/N` of all keys (where N is the new node count). Almost everything moves.
+
+You need a scheme where adding or removing a node **minimally disturbs** key-to-node assignments. That scheme is consistent hashing.
+
+## Consistent hashing: the core idea
+
+Consistent hashing maps both **nodes** and **keys** onto the same circular space, a **hash ring**, typically with values from 0 to 2^32 (or 2^128 for 128-bit hashing).
+
+**Nodes** are placed on the ring by hashing their identifier (hostname, IP, or a synthetic name). **Keys** are placed on the ring by hashing the partition key value. To find which node owns a key, you walk **clockwise** from the key's position on the ring until you hit a node. That node owns the key.
+
+<Mermaid code={`flowchart LR
+  subgraph ring[Hash Ring - 0 to 2^32]
+    direction TB
+    N1((Node A\n pos 10))
+    N2((Node B\n pos 40))
+    N3((Node C\n pos 75))
+    K1[key=user_5\n pos 25 → Node B]
+    K2[key=user_9\n pos 60 → Node C]
+    K3[key=user_2\n pos 90 → Node A]
+  end
+`} />
+
+Keys between node positions go to the next node clockwise:
+- Position 25 (between A at 10 and B at 40) → **Node B**
+- Position 60 (between B at 40 and C at 75) → **Node C**
+- Position 90 (after C at 75, wraps to A at 10) → **Node A**
+
+## What happens when you add a node
+
+Suppose you add **Node D** at position 55 on the ring. Now:
+
+- The range 40 to 55 (formerly owned by Node C, which was the next clockwise from 40) now belongs to **Node D**
+- Everything outside that range is **completely undisturbed**
+
+Only the keys in the range `(Node B's position, Node D's position]` need to move. Everything else stays where it was. With 4 nodes, you'd expect roughly 1/4 of keys to move when adding a 5th, but only in the range that the new node takes over, not everywhere.
+
+Compare that to modulo hashing where nearly all keys move. Consistent hashing makes cluster resizing **proportionally cheap** instead of catastrophically expensive.
+
+<Mermaid code={`flowchart LR
+  subgraph before[Before adding Node D]
+    NA1((Node A\n 10))
+    NB1((Node B\n 40))
+    NC1((Node C\n 75))
+  end
+  subgraph after[After adding Node D at 55]
+    NA2((Node A\n 10))
+    NB2((Node B\n 40))
+    ND((Node D\n 55 - new))
+    NC2((Node C\n 75))
+  end
+`} />
+
+## The virtual nodes problem (and fix)
+
+A naive consistent hashing ring with one position per physical node has a problem: **uneven load**.
+
+If your hash function places Node A at position 10, Node B at position 40, and Node C at position 75, then:
+- Node A owns range 75→10 (wrapping around), about 35 units
+- Node B owns range 10→40, about 30 units
+- Node C owns range 40→75, about 35 units
+
+That's not terrible, but it's not uniform. With real hash functions and real node identifiers, the spacing can be very unequal, causing some nodes to hold much more data than others. It's the same skew problem from the Kafka article, just at the shard level.
+
+The fix is **virtual nodes** (vnodes). Instead of placing each physical node once on the ring, you place it **many times**, say 100 to 200 virtual positions, each with a different hash (e.g., hash `"NodeA-1"`, `"NodeA-2"`, ..., `"NodeA-150"`). Each virtual node handles a slice of the ring; all slices for Node A's virtual nodes are handled by the same physical machine.
+
+<Mermaid code={`flowchart LR
+  subgraph ring[Hash Ring with vnodes]
+    VA1((A-1))
+    VB1((B-1))
+    VC1((C-1))
+    VA2((A-2))
+    VB2((B-2))
+    VC2((C-2))
+    VA3((A-3))
+  end
+`} />
+
+With enough virtual nodes, each physical node ends up owning many small slices of the ring distributed throughout it, and the overall load averages out to near-equal. Adding a new node means it takes a few slices from every existing node, spreading the migration cost across the cluster rather than taking all migration from one neighbor.
+
+This is what systems like **Cassandra**, **Amazon DynamoDB**, and **Redis Cluster** actually implement under the hood.
+
+## Range sharding vs. hash sharding
+
+Consistent hashing is a form of **hash-based sharding**: you hash the key to find the shard. There's an alternative: **range sharding**, where you explicitly assign key ranges to shards.
+
+**Range sharding:**
+```
+Shard 1: user_id 1 – 10,000,000
+Shard 2: user_id 10,000,001 – 20,000,000
+Shard 3: user_id 20,000,001 – 30,000,000
+```
+
+**Advantages of range sharding:**
+- Range queries are efficient: "give me all users with ID between 5M and 6M" hits exactly one shard
+- Easier to reason about manually
+- Used by HBase, Google Bigtable, and MongoDB's ranged sharding mode
+
+**Disadvantages:**
+- Requires careful range planning to avoid hotspots (sequential IDs mean all new writes go to the last shard)
+- Adding a new shard requires deciding where the split point is and moving that range
+- Auto-increment IDs are a natural hotspot: every new row goes to the "latest" shard
+
+**Hash sharding** (including consistent hashing) distributes more uniformly but loses the ability to do efficient range scans. To answer a range query, you'd scatter-gather across all shards.
+
+Most large-scale distributed databases use **hash-based sharding with virtual nodes** (DynamoDB, Cassandra, Riak) or a **routing layer** that manages explicit range mappings (Google Spanner, CockroachDB, TiDB).
+
+## Cross-shard queries: the hardest part
+
+Sharding distributes writes and storage beautifully. It makes one class of queries extremely efficient: those that touch a single partition key. But it makes another class significantly harder: **queries that span multiple shards**.
+
+Examples:
+- "Give me all orders in the last 24 hours": if `order_id` is the shard key, orders are spread across all shards. You query all shards and merge results.
+- "Count all active users": requires counting from every shard and summing.
+- Joins across tables where related rows land on different shards become cross-network joins, which are expensive and complex.
+
+This is why **choosing the partition key correctly is the most important sharding decision you'll make**. The key should align with your most critical query patterns so that the majority of queries hit exactly one shard.
+
+For queries that truly need cross-shard data, teams usually:
+- **Maintain a separate aggregation layer**: a data warehouse or analytics store that receives events from all shards and can answer global queries
+- **Duplicate data** (denormalize): store a user's data on their shard plus a denormalized copy where it's needed by other queries
+- **Accept scatter-gather**: fan out the query to all shards in parallel, collect results at the application layer (expensive but sometimes unavoidable)
+
+<Mermaid code={`sequenceDiagram
+  App->>Shard1: SELECT count(*) WHERE date > yesterday
+  App->>Shard2: SELECT count(*) WHERE date > yesterday
+  App->>Shard3: SELECT count(*) WHERE date > yesterday
+  Shard1-->>App: 12,000
+  Shard2-->>App: 9,400
+  Shard3-->>App: 11,100
+  App->>App: sum = 32,500
+`} />
+
+## Hotspot shards: the sharding version of partition skew
+
+Even with good hashing, you can still get shard hotspots, just for different reasons than in Kafka.
+
+A celebrity user with millions of followers generates dramatically more reads than an average user. If you shard by `user_id`, that celebrity's shard handles far more load than peer shards. A **hot shard** in a database is analogous to a hot partition in Kafka: the worker assigned to it is overwhelmed while others are idle.
+
+Fixes parallel the Kafka strategies:
+- **Compound partition key**: shard on `user_id + content_type` to spread one user's data across more shards
+- **Dedicated shard**: route specific high-volume keys to a separate shard cluster with more resources
+- **Caching layer**: add a cache in front of the hot shard so most reads never reach the database (this is where caching and sharding strategies intersect from [the earlier article](/blog/technical/system-design/02-caching-strategies-in-distributed-systems))
+- **Read replicas per shard**: even though sharding handles write distribution, you can still add read replicas within each shard for read-heavy scenarios
+
+## Resharding: when you need to change the shard count
+
+Despite consistent hashing's advantages, sometimes you need to **reshard** substantially when the existing layout no longer fits the data size or traffic pattern.
+
+Resharding is a serious operation:
+1. **Provision new nodes** and get them into the ring
+2. **Migrate data**: copy keys from existing nodes to new ones. This happens while the system is serving traffic, which means the data is a moving target.
+3. **Dual-write period**: during migration, writes may need to go to both old and new locations to avoid losing data in transit
+4. **Cutover**: once migration is complete, stop writing to old locations
+5. **Validate and clean up**
+
+This process is measured in hours to days for large datasets and carries real risk. It's why teams try hard to provision enough shards upfront (or choose an elastic sharding system like DynamoDB that handles resharding internally).
+
+## Systems that implement sharding and consistent hashing
+
+The theory helps, but seeing how real systems implement it is more grounding:
+
+**Apache Cassandra:** Uses consistent hashing with virtual nodes. Each node owns ranges of a token ring. Replication factor N means each key is stored on N nodes. Adding a node takes a proportional share of tokens from existing nodes.
+
+**Amazon DynamoDB:** Fully managed; the sharding is invisible to users but uses consistent hashing internally. DynamoDB handles automatic resharding ("adaptive capacity") when hot partitions are detected.
+
+**Redis Cluster:** Uses a fixed 16,384-slot hash ring. Each node owns a range of slots. Resharding moves slots between nodes; you can do it online with the CLUSTER commands.
+
+**MongoDB:** Supports both ranged and hashed sharding. The `mongos` router component maps queries to the right shard based on the shard key.
+
+**Vitess (MySQL sharding layer):** Used at YouTube/Slack, adds a sharding layer on top of MySQL with configurable shard key routing and online resharding support.
+
+## Closing thoughts
+
+Sharding is the answer to write scalability and storage limits that vertical scaling can't solve. It works by splitting data responsibility across nodes, routing each operation to the node that owns that data.
+
+Consistent hashing makes that routing **stable** under cluster changes: add a node and only a proportional fraction of data moves. Virtual nodes make the distribution **uniform**. Together they let you operate a sharded database that grows and shrinks without catastrophic rehashing.
+
+The hard part isn't the hashing. It's everything around it: choosing the right partition key for your query patterns, handling cross-shard queries, dealing with hotspots, and executing resharding safely when the time comes.
+
+If there's one principle to internalize: **the partition key is the most consequential decision in a sharded system**. Get it right at the start, and everything else is manageable. Get it wrong, and no amount of clever infrastructure compensates for the mismatch between how your data is split and how your application needs to use it.

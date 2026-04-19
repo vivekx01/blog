@@ -1,0 +1,289 @@
+---
+title: "CQRS and Event Sourcing"
+description: "What CQRS is and why it separates reads from writes, what Event Sourcing means when you store events instead of state, how they fit together, and the real tradeoffs before you reach for either pattern."
+date: "2026-04-19"
+category: "System Design"
+series: "System Design Series"
+seriesOrder: 7
+draft: false
+---
+
+## Introduction
+
+Most applications start with a simple model: one database, queries and updates going to the same tables, a service layer sitting in the middle. For a long time that model is fine. Then things get complicated.
+
+Reads and writes start having wildly different performance needs. The data model that's great for writing (normalized, consistent) is terrible for reading (too many joins). You need audit logs but your data only stores current state, so there's no history. Business rules become deeply entangled with persistence logic. Scaling reads means scaling the same database that handles writes, even though they have nothing to do with each other.
+
+Two patterns address these tensions: **CQRS** (Command Query Responsibility Segregation) and **Event Sourcing**. They're often mentioned together because they complement each other well, but they're independent ideas. You can use either one without the other. Understanding what problem each solves, and what it costs you, is more useful than treating them as a bundle.
+
+## CQRS: separating reads from writes
+
+### The core idea
+
+**CQRS** separates your application into two explicitly different models:
+
+- **Commands**: operations that **change state**: create an order, update a user's address, cancel a subscription. Commands write data. They don't return results (or return minimal confirmation).
+- **Queries**: operations that **read state**: get an order by ID, list all active subscriptions, render a dashboard. Queries return data. They don't change anything.
+
+This sounds almost too simple. The separation exists in most codebases implicitly, you have GET endpoints and POST endpoints. What CQRS makes explicit is that the **data model, storage, and optimization strategy for reads can be completely different from the model for writes**.
+
+<Mermaid code={`flowchart LR
+  Client -->|Command: PlaceOrder| CmdHandler[Command Handler]
+  Client -->|Query: GetOrderStatus| QueryHandler[Query Handler]
+  CmdHandler -->|Write| WriteDB[(Write Store\nnormalized)]
+  CmdHandler -->|Publish event| Bus[Event Bus]
+  Bus -->|Update| ReadDB[(Read Store\ndenormalized)]
+  QueryHandler -->|Read| ReadDB
+`} />
+
+### Why separate them?
+
+Consider a typical e-commerce order detail page. It needs:
+- Order header (order date, status, total)
+- Line items with product names, quantities, prices
+- Shipping address
+- Customer name
+- Payment method summary
+
+In a normalized write model, this data lives across 5+ tables with foreign keys. To display the page you JOIN across all of them. That's fine for a few hundred users, but at scale those joins become expensive, and you're adding read load to the same database that's handling all your order writes.
+
+In a read-optimized model, you'd denormalize: one document or table that pre-joins all that data, indexed exactly for how you query it. Loading the order detail page becomes one lookup instead of a multi-join query.
+
+CQRS says: **maintain both models**. The write model stays normalized and ensures consistency; the read model is purpose-built for how you actually need to display data. They're kept in sync (usually via events, which is where Event Sourcing comes in, but you can also sync them with triggers or a projection process).
+
+### A concrete example
+
+**Without CQRS:**
+```sql
+SELECT o.id, o.created_at, o.status, o.total,
+       c.name as customer_name,
+       a.street, a.city, a.zip,
+       p.last_four, p.brand
+FROM orders o
+JOIN customers c ON o.customer_id = c.id
+JOIN addresses a ON o.shipping_address_id = a.id
+JOIN payment_methods p ON o.payment_method_id = p.id
+WHERE o.id = ?
+```
+
+Every order detail request runs this join. Under high read traffic, this kills your normalized database.
+
+**With CQRS:**
+- Write model: normalized tables, transactions, foreign keys, optimized for consistency
+- Read model: a denormalized `order_details` projection (maybe in Elasticsearch, Redis, or a separate read replica table), optimized for instant lookup
+
+```json
+{
+  "order_id": "ord_123",
+  "status": "shipped",
+  "customer_name": "Alice",
+  "total": 94.50,
+  "shipping": { "street": "123 Main", "city": "SF", "zip": "94101" },
+  "payment": { "brand": "Visa", "last_four": "4242" }
+}
+```
+
+One read, no join, served from a fast store. The tradeoff is that this read model must be **kept in sync** with the write model, which is a real operational burden.
+
+### CQRS without Event Sourcing
+
+You don't need Event Sourcing to use CQRS. You can sync read models using:
+- **Database triggers**: on write, trigger an update to the read store
+- **Change Data Capture (CDC)**: tools like Debezium watch the write database's transaction log and propagate changes to a read store
+- **Application-level dual writes**: when the command handler writes to the primary DB, it also publishes a message that updates the read model
+
+These approaches all have tradeoffs around consistency (the read model lags slightly), failure handling (what if the read update fails?), and operational complexity. But they're simpler than full Event Sourcing for many use cases.
+
+## Event Sourcing: storing events instead of state
+
+### The core idea
+
+In a conventional database, you store **current state**. The `orders` table has a row for each order, and when the order ships, you update the `status` column to `shipped`. The history is gone. You know where the order *is*, not how it *got there*.
+
+**Event Sourcing** flips this: instead of storing current state, you store the **sequence of events** that produced it. The order table isn't a row with a status column. It's a log of events:
+
+```
+OrderPlaced    { order_id: 123, customer: Alice, total: 94.50, at: T+0 }
+PaymentCaptured{ order_id: 123, amount: 94.50, at: T+2min }
+OrderShipped   { order_id: 123, tracking: "UPS-9876", at: T+1day }
+```
+
+Current state is derived by **replaying these events in order**. You never update or delete events; you only append new ones.
+
+<Mermaid code={`flowchart TB
+  E1[OrderPlaced] --> E2[PaymentCaptured]
+  E2 --> E3[OrderShipped]
+  E3 --> Agg[Replay → Current Order State]
+  Agg -->|status: shipped\ntotal: 94.50| App[Application]
+`} />
+
+### Why store events instead of state?
+
+1. **Complete audit history.** The event log is your audit log. You know exactly what happened, in what order, and when. This is invaluable for debugging ("how did the order end up in this state?"), compliance ("show me everything that happened to this account"), and support ("why was the customer charged twice?").
+
+2. **Temporal queries.** You can replay events up to any point in time to reconstruct past state. "What did this order look like on Tuesday before the refund was applied?" Replay through Tuesday.
+
+3. **Bug recovery.** If a bug caused incorrect state, you can fix the event processing logic and **replay all events** from scratch to rebuild correct current state. In a conventional database, corrupted or incorrect state is often permanent.
+
+4. **Multiple read models from the same events.** You can build different projections from the same event stream: one for customer-facing order tracking, one for accounting, one for analytics. Each projection reads the same events and materializes them differently. This is where Event Sourcing and CQRS fit together well.
+
+5. **Natural decoupling.** Events are a natural integration point between services. Instead of one service querying another's database, it subscribes to the event stream: decoupled, asynchronous, and resilient to the source service being temporarily down.
+
+### How current state is reconstructed: aggregates
+
+The entity that accumulates events to produce current state is called an **aggregate** (the term comes from Domain-Driven Design, but you don't need all of DDD to use Event Sourcing).
+
+An aggregate has:
+- An **apply** function that takes an event and updates in-memory state
+- A **current state** that's rebuilt by applying all events in order
+
+```python
+class Order:
+    def apply(self, event):
+        if isinstance(event, OrderPlaced):
+            self.status = "pending"
+            self.total = event.total
+        elif isinstance(event, PaymentCaptured):
+            self.status = "paid"
+        elif isinstance(event, OrderShipped):
+            self.status = "shipped"
+            self.tracking = event.tracking_number
+
+    @classmethod
+    def rebuild(cls, events):
+        order = cls()
+        for event in events:
+            order.apply(event)
+        return order
+```
+
+For an order with 3 events, rebuilding is instant. For an entity with 50,000 events (a long-lived account), replaying all events on every load gets slow. The fix is **snapshots**: periodically persist a snapshot of current state, then only replay events since the last snapshot.
+
+### Projections: materializing read models from events
+
+Events in the event store are the source of truth. **Projections** are derived read models: they consume events and build queryable views.
+
+A projection is essentially:
+```python
+def project_order_summary(event):
+    if isinstance(event, OrderPlaced):
+        db.upsert("order_summary", {
+            "id": event.order_id,
+            "status": "pending",
+            "total": event.total,
+        })
+    elif isinstance(event, OrderShipped):
+        db.update("order_summary",
+            where={"id": event.order_id},
+            set={"status": "shipped"}
+        )
+```
+
+You can have as many projections as you need, each reading the event stream and building the read model it's responsible for. Because projections are derived, they're **disposable**: if a projection has a bug, fix the projection code and rebuild it by replaying all events from the start.
+
+<Mermaid code={`flowchart LR
+  ES[(Event Store)]
+  ES -->|events| P1[Projection: order_summary]
+  ES -->|events| P2[Projection: customer_revenue]
+  ES -->|events| P3[Projection: fulfillment_queue]
+  P1 --> R1[(Summary DB)]
+  P2 --> R2[(Analytics DB)]
+  P3 --> R3[(Fulfillment DB)]
+`} />
+
+This is the full CQRS + Event Sourcing picture: **commands** go through your domain logic and emit **events** to the event store. **Projections** consume events to build **read models**. **Queries** read from the read models. Reads and writes are completely separate, and the event store is the durable, append-only source of truth for everything.
+
+## CQRS + Event Sourcing together
+
+When you combine them:
+
+<Mermaid code={`sequenceDiagram
+  Client->>CommandHandler: PlaceOrder(items, payment)
+  CommandHandler->>Domain: validate & process
+  Domain-->>EventStore: append OrderPlaced event
+  EventStore-->>ProjectionWorker: OrderPlaced
+  ProjectionWorker->>ReadStore: update order_summary
+  Client->>QueryHandler: GetOrderStatus(order_id)
+  QueryHandler->>ReadStore: lookup
+  ReadStore-->>Client: { status: pending, total: 94.50 }
+`} />
+
+The flow:
+1. Client sends a **command**
+2. Command handler loads the aggregate (by replaying events), validates business rules, and if valid, emits new events to the event store
+3. **Projections** (running asynchronously) consume new events and update read models
+4. Client queries the **read model**, potentially milliseconds or seconds later, since the projection update is async
+
+This introduces **eventual consistency** between the write side and the read side. The command succeeds and the event is persisted, but the read model might not reflect it instantly. For many use cases this is fine; for some (showing a user their own just-placed order) it requires careful handling (optimistic UI updates, polling, or synchronous projection for critical paths).
+
+## The real tradeoffs
+
+CQRS and Event Sourcing are powerful tools. But they're also genuinely complex, and the costs are worth spelling out.
+
+### CQRS tradeoffs
+
+**What you gain:**
+- Read and write models independently optimized
+- Read scalability: query side can be scaled, cached, or duplicated without affecting write side
+- Cleaner code separation: command handling is about invariants; query handling is about data shape
+
+**What it costs:**
+- **Two models to maintain**: when the domain changes, both the write model and read model(s) may need updates
+- **Eventual consistency**: the read model lags the write model, which complicates user-facing features that need to immediately reflect a change
+- **More infrastructure**: separate stores, sync mechanisms, projection workers
+- **Overkill for simple domains**: if your reads and writes have similar access patterns, CQRS adds complexity with no payoff
+
+### Event Sourcing tradeoffs
+
+**What you gain:**
+- Full audit trail
+- Temporal queries and historical state reconstruction
+- Bug recovery by replaying events with fixed logic
+- Natural decoupling via event-driven integration
+
+**What it costs:**
+- **Eventual consistency is mandatory**: projections are always async, so read models always lag
+- **Schema evolution is hard**: events are immutable and permanent. If you change an event's structure, you need to handle old and new formats simultaneously (upcasting, versioning).
+- **Event store infrastructure**: you need an append-only store that supports ordered, reliable event streaming. EventStoreDB, Kafka, and cloud-native options (DynamoDB streams, Azure Event Hubs) fill this role, but it's infrastructure to operate.
+- **Querying is awkward**: you can't just `SELECT * FROM orders WHERE status = 'pending'`; you query projections, and if a projection doesn't exist for your query, you build one.
+- **Learning curve**: the aggregate/event/projection mental model is different from CRUD and takes time to internalize.
+
+### When to actually use them
+
+**CQRS alone** makes sense when:
+- Your read and write patterns are genuinely different and diverging
+- You need to scale reads independently of writes
+- You have complex queries that are killing your write database
+- You're building an analytics or reporting layer alongside a transactional system
+
+**Event Sourcing** makes sense when:
+- Audit trail and history are first-class requirements (financial systems, compliance-heavy domains)
+- You need to reconstruct past state or replay events for debugging
+- You're building a multi-service system where events are already the integration mechanism
+- Your domain is complex enough that event-driven aggregates genuinely clarify business logic
+
+**Neither** makes sense for a simple CRUD app, an internal tool, or any system where the added complexity isn't justified by the requirements. Most teams apply these patterns to specific bounded contexts (the order management service, the accounting ledger) rather than the entire system. The user profile service might stay simple CRUD; the financial transaction service might use full Event Sourcing.
+
+## Common pitfalls
+
+**Pitfall 1: Using events as DTOs, not business facts.**
+An event should describe something meaningful that happened in your domain: `OrderShipped`, `PaymentFailed`, `SubscriptionCancelled`. It should NOT be `OrderUpdated with fields: { status: "shipped" }`. Generic update events lose the business meaning and make projection logic fragile.
+
+**Pitfall 2: Putting business logic in projections.**
+Projections should be mechanical, transforming events into a view. Business rules belong in the command handler and domain aggregate. If your projection is making decisions, you've mixed concerns.
+
+**Pitfall 3: Not planning for schema evolution.**
+Events are forever. An `OrderPlaced` event from 2024 must still be processable by your 2027 codebase. Design events with versioning in mind from day one; add upcasters (functions that transform old event versions to new formats) as the domain evolves.
+
+**Pitfall 4: Inconsistent read model expectations.**
+Users expect that immediately after they do something, the UI reflects it. When reads are eventual, this creates confusing moments ("I just placed the order but it's not in my order list"). Solve this with optimistic UI updates, version tokens, or synchronously returning the result of the command rather than forcing a read after write.
+
+## Closing thoughts
+
+CQRS and Event Sourcing solve real, specific problems, but they add real, specific complexity. The value proposition is clear: separately optimizable read and write models, full history, temporal queries, event-driven integration. The cost is also clear: more infrastructure, eventual consistency, schema evolution challenges, and a different way of thinking about persistence.
+
+The question worth asking first: **do you actually have the problem these patterns solve?** If your reads and writes have similar access patterns and volume, skip CQRS. If you don't need full audit history and temporal queries, skip Event Sourcing. If your domain is simple and stable, CRUD is the right tool.
+
+But if you're building financial systems, multi-service event-driven architectures, or complex domains where "how did we get to this state?" is a real question, these patterns pay for themselves quickly. The audit trail alone can be worth it; the ability to fix bugs by replaying events is genuinely transformative once you've lived through a data corruption incident in a conventional system.
+
+Start simple. Add CQRS when read/write divergence is hurting you. Add Event Sourcing when history and events are first-class concerns. Don't add both speculatively just because the architecture diagram looks elegant. The complexity is real, and it compounds.
