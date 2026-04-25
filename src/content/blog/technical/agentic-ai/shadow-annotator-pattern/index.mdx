@@ -1,0 +1,174 @@
+---
+title: "The Shadow Annotator Pattern - Building a Multi-Agent System, Part 1"
+description: "How splitting conversation and understanding into two changed everything"
+date: "2026-04-26"
+category: "Agentic AI"
+series: "Building a Multi-Agent System"
+seriesOrder: 1
+draft: false
+---
+
+I was building a system where users describe what they want in natural language. Sometimes clearly, sometimes in circles, sometimes changing their mind mid-sentence. The system had to understand what they actually meant and map it to a specific set of capabilities it had.
+
+The first version was simple. One conversation node. It talked to the user, understood the requirements, and when it felt ready, moved ahead.
+
+It was a mess.
+
+---
+
+## The problem with doing two things at once
+
+The conversation node had two jobs: keep the user engaged with good questions, and deeply understand what the user actually needed at a capability level.
+
+These two jobs sound compatible. They aren't.
+
+When you ask an LLM to simultaneously hold a natural flowing conversation *and* think deeply about capability mapping, it does both poorly. The conversation felt shallow. The understanding was lossy. Important things got missed. And the notes it produced for downstream agents were vague, incomplete, and sometimes just wrong.
+
+The deeper problem was that the LLM had no memory of what it already knew. Every turn it was re-reading the full conversation and re-deriving its understanding from scratch. There was no accumulation. No memory being built. Just re-reading the same conversation and arriving at the same half-baked understanding every time.
+
+But the worst problem wasn't the quality of understanding. It was something more fundamental.
+
+**The conversation node never wanted to stop talking.**
+
+I noticed it kept asking questions. Good questions, sometimes. But it never handed off. It would just keep the conversation going indefinitely, never deciding "we have enough, time to move forward." Relying on the conversation LLM to know when to pivot was a mistake. It had no reliable mechanism for that judgment. Sometimes it pivoted too early. Most of the time it never pivoted at all.
+
+<Mermaid code={`flowchart LR
+    U([User]) --> C
+    C["Conversation node\n─────────────────\nJob 1: talk to user\nJob 2: understand intent\nJob 3: decide when to pivot"] --> D
+    D["Downstream\n─────────────────\nShallow notes\nMissed requirements"]
+    style C fill:#F0997B,stroke:#D85A30,color:#4A1B0C
+    style D fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style U fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+`} />
+
+One node. Three jobs. All done poorly.
+
+---
+
+## The insight: split the jobs
+
+At some point I stopped trying to fix the single node and asked a different question.
+
+What if instead of one node doing two jobs, I put a second, smarter person right next to it?
+
+Not someone the user talks to. Someone sitting silently alongside the conversation, watching everything, understanding everything at a deeper level, taking notes, and deciding when it's time to move ahead.
+
+That's the Shadow Annotator.
+
+It runs in parallel with the conversation node on every user message. The user never sees it. It doesn't respond to the user. Its job is to understand what the user is actually trying to build, map it to what the system can do, and track whether we have enough to move forward. That's it.
+
+The conversation node stays dumb and focused. Its only job is to talk to the user, ask good questions, keep things flowing. But now it's not alone. The Shadow Annotator is whispering in its ear, telling it what the user is really saying and what questions actually need to be asked next.
+
+<Mermaid code={`flowchart TD
+    U([User message])
+    U --> CN
+    U --> SA
+
+    SA["🔇 Shadow annotator\n─────────────────\nSilent. Maps intent to capabilities.\nBuilds notes. Tracks confidence."]
+    CN["Conversation node\n─────────────────\nTalks to user. Stays focused."]
+
+    SA -- hints --> CN
+    SA -- notes + ready flag --> P
+
+    CN --> CS["User confirmation\n─────────────────\nSummary shown. User affirms."]
+    CS --> P
+
+    P["Planner\n─────────────────\nReads structured notes.\nCompiles pipeline."]
+
+    style SA fill:#AFA9EC,stroke:#7F77DD,color:#26215C
+    style CN fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style CS fill:#EF9F27,stroke:#BA7517,color:#412402
+    style P fill:#97C459,stroke:#639922,color:#173404
+    style U fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+`} />
+
+---
+
+## How it works
+
+Every time the user sends a message, both the conversation LLM and the Shadow Annotator receive it.
+
+The annotator knows the full capability surface of the system. Every capability, every feature, every integration. When a user says something that maps to a specific capability, the annotator recognizes it immediately, even if the user described it vaguely or indirectly. The conversation LLM would have missed it or treated it as generic text. The annotator catches it and notes it down.
+
+The notes are two layers: running freeform text that builds up over the conversation, and specific structured fields to make specific platform feature detection more robust and accurate. The structured fields are what actually matter for downstream agents. Freeform text leaves room for interpretation. A field called `mentioned_integrations: ["feature1", "feature2"]` does not. The planner can't miss it.
+
+This is roughly what the output model looks like:
+
+```python
+class AnnotatorOutput(BaseModel):
+    # Freeform understanding — built up incrementally across turns
+    requirement_summary: str
+
+    # Structured fields — forcing functions for the planner
+    mentioned_integrations: list[str]
+    
+    # Pivot control
+    confidence_score: float   # 0.0 to 1.0
+    ready: bool               # True when confidence crosses threshold
+    
+    # Hint for the conversation node
+    hints: str
+```
+
+There's one more thing the annotator always does: it receives its own previous notes before running. I had to add this after seeing it fail repeatedly. Without it, the annotator would rewrite its notes from scratch every turn instead of building on them. Requirements mentioned early in the conversation would get dropped as the conversation grew longer. Feeding it its own notes forces it to accumulate, not overwrite. I'll get into this more in Part 3.
+
+```python
+def run_annotator(conversation_history: list, previous_notes: AnnotatorOutput | None):
+    system_prompt = build_annotator_prompt()
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        # Give it previous notes so it builds, not rewrites
+        {"role": "user", "content": f"Previous notes:\n{previous_notes.model_dump_json(indent=2) if previous_notes else 'None'}"},
+        {"role": "user", "content": f"Conversation so far:\n{format_conversation(conversation_history)}"},
+        {"role": "user", "content": "Update the notes based on the latest message. Build on what you already have."}
+    ]
+    
+    return llm.with_structured_output(AnnotatorOutput).invoke(messages)
+```
+
+---
+
+## The pivot: confidence score and the ready flag
+
+The annotator also owns the pivot decision.
+
+On every run, it calculates a confidence score: how complete and clear is the current understanding of what the user wants? When that score crosses a threshold, it triggers the confirmation step.
+
+The conversation node shows the user a summary of everything it understood. The user reads it, confirms with something like "yes, go ahead" or "looks good". At that point a classifier picks up the confirmation, sets `ready` to true, and the system hands off to the planner. `ready` is never set before the user has actually confirmed.
+
+<Mermaid code={`flowchart TD
+    M([User message]) --> CN & SA
+    SA[Shadow annotator] --> N[Updates notes\nRecalculates confidence]
+    N --> D{ready?}
+    D -- no, keep going --> CN
+    CN[Conversation node] --> M
+    D -- yes --> CS["Confirmation summary\nConv. node presents to user"]
+    CS --> P([Pivot to planner])
+
+    style SA fill:#AFA9EC,stroke:#7F77DD,color:#26215C
+    style CN fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style CS fill:#EF9F27,stroke:#BA7517,color:#412402
+    style P fill:#97C459,stroke:#639922,color:#173404
+    style M fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style D fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style N fill:#CECBF6,stroke:#AFA9EC,color:#26215C
+`} />
+
+It's a reliability thing. The user always sees what was captured before anything happens downstream. And it's a safeguard against the annotator being overconfident. A high score doesn't mean it got everything right. The user is the final check.
+
+---
+
+## Why this works
+
+The main reason is simple: conversation and understanding are different jobs.
+
+Conversation is a UX problem. Understanding is an intelligence problem. They require different prompting, different context, different evaluation criteria. Trying to solve both in one node means compromising on both.
+
+Once you split them, each one gets to be good at its specific job. The conversation node is friendly, focused, and responsive. The annotator is deep, structured, and actually builds on previous turns. Together they do what neither can do on its own: a natural conversation that actually builds towards complete, structured understanding.
+
+The other thing that actually matters is who owns the pivot. When the annotator owns the confidence score and the ready flag, the decision to move forward is based on actual accumulated understanding, not on the conversation LLM's in-the-moment judgment. The pivot becomes a calculated decision, not a guess.
+
+---
+
+In Part 2 I'll cover what happens after the pivot: how the planner takes the annotator's notes and compiles a full execution pipeline upfront, and why we stopped routing agents one step at a time.
