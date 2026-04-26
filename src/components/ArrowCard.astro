@@ -17,8 +17,13 @@ const date = entry.data.date.toLocaleDateString("en-US", { year: "numeric", mont
     <div class="text-sm">
       {entry.data.description}
     </div>
-    <div class="text-xs text-black/40 dark:text-white/40 mt-1">
-      {date}
+    <div class="flex items-center gap-2 mt-1">
+      <span class="text-xs text-black/40 dark:text-white/40">{date}</span>
+      {entry.data.category && (
+        <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-black/50 dark:text-white/50">
+          {entry.data.category}
+        </span>
+      )}
     </div>
   </div>
   <svg 

@@ -1,0 +1,154 @@
+---
+title: "Plan and Execute: Building a Multi-Agent System, Part 2"
+description: "Why we stopped routing agents one step at a time and compiled the full pipeline upfront"
+date: "2026-04-24"
+category: "Agentic AI"
+series: "Building a Multi-Agent System"
+seriesOrder: 2
+draft: false
+---
+
+In Part 1 I talked about the Shadow Annotator, the silent agent that runs alongside the conversation, builds structured notes, and decides when we have enough clarity to move forward.
+
+Once the pivot happens, those notes land in the hands of the planner. And this is where the second big architectural decision happens.
+
+How do you turn a set of notes about what the user wants into an actual execution flow?
+
+---
+
+## The obvious approach and why we didn't use it
+
+The standard pattern in multi-agent systems is the supervisor: a central agent that looks at the current state, decides which agent to call next, calls it, looks at the result, and decides again. One step at a time. Dynamic, flexible, responsive.
+
+It sounds great. In practice it has a fundamental problem.
+
+Every routing decision is an LLM call. And LLM calls are non-deterministic. So every step in your flow is a point of failure where the system can go in the wrong direction. The more steps you have, the more chances for a wrong turn. By the time you're five nodes deep, you've compounded the uncertainty five times over.
+
+There's also a debugging problem. When something goes wrong in a supervisor pattern, you don't know where the flow went off the rails until you trace through every routing decision. There's no single artifact that tells you what the system intended to do.
+
+We needed something more reliable. Something you could inspect before execution started.
+
+---
+
+## Compile the plan upfront
+
+By the time the planner runs, it has the annotator's complete structured notes: every mentioned integration, every capability flag, every requirement. It doesn't need to discover the flow step by step. It can look at the notes and write the entire plan at once.
+
+So that's what the planner does. It reads the notes and produces a plan context log, a structured document that contains the full ordered list of nodes to visit, with a specific context message for each one.
+
+```json
+{
+  "plan": [
+    {
+      "node": "specialist_a",
+      "message": "User wants an event-driven setup. Confirm event type and behavior with user."
+    },
+    {
+      "node": "config_a",
+      "message": "Collect configuration details from user. This is a HITL step."
+    },
+    {
+      "node": "specialist_b",
+      "message": "User mentioned two integrations. Identify and select the appropriate ones."
+    },
+    {
+      "node": "config_b",
+      "message": "Collect integration parameters from user. Static params via interrupt."
+    },
+    {
+      "node": "composer",
+      "message": "Write agent instructions covering the event setup and integration workflow."
+    },
+    {
+      "node": "save_node",
+      "message": "Save all changes to backend and propagate to frontend."
+    },
+    {
+      "node": "summarizer",
+      "message": "Summarize what was configured for the user."
+    }
+  ]
+}
+```
+
+This plan context log is a first-class artifact. It exists before a single specialist node runs. You can log it, inspect it, and know exactly what the system is going to do before it does it.
+
+---
+
+## The dispatcher
+
+Once the planner produces the plan, it hands off to the dispatcher.
+
+The dispatcher's job is straightforward: read the plan context log and route execution through the nodes in order. It doesn't make decisions. It doesn't call an LLM to figure out what to do next. It just follows the plan.
+
+Each node receives the plan context log along with its specific message. The message tells it exactly why it was invoked and what it needs to do. The node doesn't need to infer its purpose from general context. It has a direct brief.
+
+<Mermaid code={`flowchart TD
+    A["Shadow annotator notes\n─────────────────\nStructured fields\nRequirement summary"] --> P
+
+    P["Planner\n─────────────────\nReads notes.\nWrites full plan upfront."] --> PL
+
+    PL["Plan context log\n─────────────────\nOrdered node list\nPer-node context messages"] --> D
+
+    D["Dispatcher\n─────────────────\nFollows the plan.\nNo LLM routing decisions."] --> N
+
+    N["Specialist nodes\n─────────────────\nEach receives its\nspecific message"] --> F
+
+    F["Fixed final nodes\n─────────────────\nSave node\nSummarizer"]
+
+    style A fill:#AFA9EC,stroke:#7F77DD,color:#26215C
+    style P fill:#15122e,stroke:#7F77DD,color:#AFA9EC
+    style PL fill:#1e1d2e,stroke:#3a3858,color:#c9c7e8
+    style D fill:#15122e,stroke:#7F77DD,color:#AFA9EC
+    style N fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style F fill:#97C459,stroke:#639922,color:#173404
+`} />
+
+---
+
+## Dynamic region and fixed region
+
+Not all nodes are equal in this flow.
+
+Some nodes are always present regardless of what the user wants: the save node and the summarizer always run. These form the fixed region. They're not in the plan because they don't need to be. The dispatcher knows to always execute them at the end.
+
+Everything in the middle is the dynamic region, the nodes the planner decided to include based on the annotator's notes. This region is fully extensible. Adding a new capability to the system means adding a new specialist node. The planner just needs to know it exists and when to include it.
+
+<Mermaid code={`flowchart LR
+    P([Planner]) --> D([Dispatcher])
+
+    subgraph dynamic["Dynamic region — decided by planner"]
+        N1[Specialist A] --> N2[Config A]
+        N2 --> N3[Specialist B]
+        N3 --> N4[Config B]
+        N4 --> N5[Composer]
+    end
+
+    subgraph fixed["Fixed final region — always runs"]
+        F1[Save node] --> F2[Summarizer]
+    end
+
+    D --> N1
+    N5 --> F1
+
+    style dynamic fill:#15122e,stroke:#7F77DD44,color:#AFA9EC
+    style fixed fill:#0a1f18,stroke:#1D9E7544,color:#5DCAA5
+`} />
+
+This separation matters. The fixed region is your reliability guarantee. No matter how wrong the dynamic region goes, the system always lands in a clean final state. Save always runs. The user always gets a summary.
+
+---
+
+## The planner is only as good as the notes
+
+The planner doesn't talk to the user. It doesn't ask clarifying questions. It reads the notes the annotator produced and writes a plan from them. If the notes are incomplete, if the annotator missed a requirement, dropped an integration, or failed to flag an event-driven pattern, the planner will write a plan that doesn't include the right nodes.
+
+Garbage in, garbage out. But at an architectural level.
+
+This is why the Shadow Annotator pattern from Part 1 isn't just a nice-to-have. It's load-bearing. The quality of the annotator's notes directly determines the quality of the plan. The structured fields like `mentioned_integrations`, `mentioned_tools`, and event flags exist specifically to make it impossible for the planner to miss obvious signals.
+
+The two patterns are designed together. The annotator produces notes that the planner can rely on. The planner produces a plan that the dispatcher can follow without second-guessing. Each layer removes a source of non-determinism from the one below it.
+
+---
+
+In Part 3 I'll get into what actually broke while building this: context overflows, the annotator losing track of earlier requirements, and the planner ignoring things it shouldn't have. And the specific fixes that made each one stop happening.

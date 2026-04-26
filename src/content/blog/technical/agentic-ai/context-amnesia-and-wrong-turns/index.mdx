@@ -1,0 +1,208 @@
+---
+title: "Context, Amnesia and Wrong Turns: Building a Multi-Agent System, Part 3"
+description: "Three things that broke in production and exactly how I fixed them"
+date: "2026-04-26"
+category: "Agentic AI"
+series: "Building a Multi-Agent System"
+seriesOrder: 3
+draft: false
+---
+
+If you've read Part 1 and Part 2, you know what the system looks like when it works. A shadow annotator building structured notes alongside the conversation, a planner compiling a full pipeline from those notes, a dispatcher walking specialists through it one by one.
+
+What I haven't told you yet is how many times it didn't work before it got there.
+
+These aren't theoretical edge cases. Every failure in this post happened in production. Here's what broke, why it broke, and exactly how I fixed it.
+
+---
+
+## 1. Context overflow during requirement gathering
+
+The shadow annotator and the conversation node both receive the full conversation history on every turn. That's the design. They need the full picture to do their jobs properly.
+
+The problem is that requirement gathering conversations get long. Users add things, change their mind, circle back to earlier points, ask clarifying questions of their own. At some point the conversation history gets big enough that you start hitting context limits. Both nodes start degrading. The annotator misses things. The conversation node loses the thread.
+
+The naive fix is trimming by token count: just cut the history to the last N tokens. I tried this. It breaks things in a different way. You end up trimming mid-thought, cutting a user message that was still being built upon, or splitting a back-and-forth exchange that only makes sense as a whole.
+
+**The fix: trim by complete change units.**
+
+A change unit is one full cycle of the user describing something and the system acknowledging and capturing it. A complete requirement addition, a complete modification, a complete clarification. Not a token boundary. A semantic boundary.
+
+When the history gets too long, I trim the oldest complete change units first, not arbitrary tokens. The conversation that remains is always coherent. No dangling half-thoughts, no split exchanges.
+
+```python
+def trim_by_change_units(history: list, max_units: int) -> list:
+    # Each change unit is a complete user+assistant exchange
+    # around a single requirement addition or modification
+    units = group_into_change_units(history)
+    
+    if len(units) <= max_units:
+        return history
+    
+    # Drop oldest units, keep most recent ones
+    kept_units = units[-max_units:]
+    return flatten_units(kept_units)
+```
+
+A partial requirement is worse than no requirement. The trim has to respect that.
+
+---
+
+## 2. Classifier amnesia
+
+This one took longer to figure out because it didn't fail loudly. It failed quietly, in a way that only became obvious when the planner produced a plan that was missing something the user had clearly mentioned twenty messages ago.
+
+The shadow annotator runs on every turn. Every time it runs, it reads the conversation and produces updated notes. The problem: it was rewriting the notes from scratch each time instead of building on what it had already captured.
+
+Early in the conversation the user mentions they want the system to watch for new emails and respond automatically. The annotator notes this correctly. The conversation continues. The user adds more requirements. The conversation gets longer. Twenty turns later the annotator runs again, re-reads everything, and in the process of synthesising a long conversation into notes, quietly drops the email requirement because it's now buried deep in the history and the more recent additions are dominating its attention.
+
+The planner reads the notes. No email requirement. The plan doesn't include the email specialist. The user gets a workflow that does everything except the thing they mentioned first.
+
+**The fix: feed the annotator its own previous notes on every run.**
+
+Instead of asking it to derive everything fresh from the conversation, you give it what it already knows and ask it to build on that. The previous notes become its working memory. New things get added. Existing things don't get dropped unless the user explicitly changed them.
+
+```python
+def run_annotator(conversation_history: list, previous_notes: AnnotatorOutput | None):
+    messages = [
+        {"role": "system", "content": build_annotator_prompt()},
+        {
+            "role": "user", 
+            "content": f"Your previous notes:\n{previous_notes.model_dump_json(indent=2) if previous_notes else 'None'}\n\nUpdate these notes based on the latest message. Build on what you have. Do not drop anything unless the user explicitly changed it."
+        },
+        {"role": "user", "content": f"Latest conversation:\n{format_conversation(conversation_history)}"}
+    ]
+    
+    return llm.with_structured_output(AnnotatorOutput).invoke(messages)
+```
+
+The instruction matters: *build on what you have, do not drop anything unless the user explicitly changed it.* Without that explicit instruction the model still tends to rewrite rather than accumulate, even when given the previous notes.
+
+The notes are not an output the annotator produces at the end. They're a living document it maintains across the entire conversation.
+
+---
+
+## 3. The planner missing obvious signals
+
+The annotator produces notes. The planner reads those notes and decides which specialists to include in the pipeline and in what order. For most requirements this worked fine. For obvious, explicit signals like a user mentioning Gmail or a specific tool by name, the planner would sometimes just miss them.
+
+Not every time. Not even most of the time. But enough times that it was a real problem. The planner was reading freeform notes and making judgment calls, and sometimes its judgment was wrong in ways that were completely avoidable.
+
+The issue was giving the planner too much to interpret. Freeform text is flexible but it leaves room for the planner to miss things or deprioritise them. An LLM reading a paragraph of notes and deciding which nodes to include is doing real inference work. Real inference work means real failure modes.
+
+**The fix: structured fields as forcing functions.**
+
+I added explicit structured fields to the annotator's output specifically for the signals that absolutely cannot be missed. Things like `mentioned_integrations` and `mentioned_tools`. Not for the planner to interpret. For the planner to act on directly.
+
+```python
+class AnnotatorOutput(BaseModel):
+    requirement_summary: str  # freeform, for context
+    
+    # Forcing functions — planner must include specialists for these
+    mentioned_integrations: list[str]  # e.g. ["gmail", "slack"]
+    mentioned_tools: list[str]         # e.g. ["search", "calculator"]
+    
+    confidence_score: float
+    ready: bool
+    hints: str
+```
+
+The planner prompt then treats these fields as hard requirements, not suggestions:
+
+```python
+planner_prompt = """
+You are planning a specialist pipeline based on the annotator's notes.
+
+HARD REQUIREMENTS — these must be reflected in the plan no matter what:
+- mentioned_integrations: {mentioned_integrations}
+- mentioned_tools: {mentioned_tools}
+
+Use the requirement_summary for additional context and ordering decisions.
+"""
+```
+
+The distinction matters: the freeform summary is for context and nuance. The structured fields are non-negotiable. Once I separated those two concerns the planner stopped missing obvious signals entirely.
+
+---
+
+## The same root cause
+
+All three of these failures came down to the same thing: I was relying on LLM judgment for things that could be made deterministic.
+
+Trimming by tokens instead of change units: relying on an arbitrary boundary instead of a meaningful one. Annotator rewriting instead of accumulating: relying on the model to remember across turns without giving it its memory. Planner missing structured signals: relying on the model to infer hard requirements from soft text.
+
+Every time I replaced an implicit assumption with an explicit mechanism, the failure went away.
+
+The lesson isn't that LLMs are unreliable. It's that you shouldn't ask them to do things that aren't actually LLM problems. Memory, structured extraction, hard constraints: those are engineering problems. Solve them with engineering. Leave the actual reasoning and language work to the model.
+
+---
+
+---
+
+## The full picture
+
+Three parts in, here's the complete system in one place.
+
+<Mermaid code={`flowchart TD
+    U([User]) --> T
+
+    T["Context trimmer\n─────────────────\nTrim by semantic\nchange units"]
+
+    T --> SA & CN
+
+    SA["🔇 Shadow annotator\n─────────────────\nReads prev notes.\nUpdates notes.\nTracks confidence."]
+    CN["Conversation node\n─────────────────\nTalks to user.\nAsks focused questions."]
+
+    SA -- hints --> CN
+    CN --> U
+
+    SA --> CHK{Confidence\nthreshold?}
+    CHK -- not yet --> CN
+    CHK -- reached --> CS["Confirmation summary\n─────────────────\nConv. node shows\nfull understanding"]
+
+    CS --> UC([User confirms])
+    UC --> CL["Classifier\n─────────────────\nDetects confirmation.\nSets ready = true."]
+
+    CL --> PL["Planner\n─────────────────\nReads annotator notes.\nWrites full plan upfront."]
+
+    PL --> PCL["Plan context log\n─────────────────\nOrdered nodes\nPer-node messages"]
+
+    PCL --> D["Dispatcher\n─────────────────\nFollows the plan.\nNo LLM routing."]
+
+    subgraph dynamic["Dynamic region — decided by planner"]
+        N1[Specialist A] --> N2[Config A]
+        N2 --> N3[Specialist B]
+        N3 --> N4[Config B]
+        N4 --> N5[Composer]
+    end
+
+    subgraph fixed["Fixed region — always runs"]
+        F1[Save node] --> F2[Summarizer]
+    end
+
+    D --> N1
+    N5 --> F1
+    F2 --> DONE([Done])
+
+    style T fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style SA fill:#AFA9EC,stroke:#7F77DD,color:#26215C
+    style CN fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style CS fill:#EF9F27,stroke:#BA7517,color:#412402
+    style CL fill:#EF9F27,stroke:#BA7517,color:#412402
+    style CHK fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style U fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style UC fill:#D3D1C7,stroke:#888780,color:#2C2C2A
+    style PL fill:#15122e,stroke:#7F77DD,color:#AFA9EC
+    style PCL fill:#1e1d2e,stroke:#3a3858,color:#c9c7e8
+    style D fill:#15122e,stroke:#7F77DD,color:#AFA9EC
+    style N1 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style N2 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style N3 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style N4 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style N5 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style F1 fill:#97C459,stroke:#639922,color:#173404
+    style F2 fill:#97C459,stroke:#639922,color:#173404
+    style DONE fill:#97C459,stroke:#639922,color:#173404
+    style dynamic fill:#15122e,stroke:#7F77DD44,color:#AFA9EC
+    style fixed fill:#0a1f18,stroke:#1D9E7544,color:#5DCAA5
+`} />

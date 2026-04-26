@@ -13,11 +13,11 @@ const allPosts = (await getCollection("blog"))
 // Filter posts by category based on slug
 const technicalPosts = allPosts
   .filter(post => post.slug.startsWith("technical/"))
-  .slice(0, 5);
+  .slice(0, 8);
 
 const lifeExperiencePosts = allPosts
   .filter(post => post.slug.startsWith("life-experiences/"))
-  .slice(0, 5);
+  .slice(0, 8);
 ---
 
 <PageLayout title={BLOG.TITLE} description={BLOG.DESCRIPTION}>
