@@ -2,6 +2,7 @@
 title: "Compiling React JSX at Runtime: Lessons from a Dynamic Widget System"
 description: "A real-world engineering lesson on what breaks when React's build-time assumptions disappear, and how compiling JSX at runtime changes the way you think about flexibility, safety, and performance."
 date: "2025-12-28"
+category: "Frontend Engineering"
 ---
 
 Recently, I tackled a frontend engineering challenge that made me pause and think:  

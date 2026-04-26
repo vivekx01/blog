@@ -7,6 +7,16 @@ type Props = {
 
 const { entry } = Astro.props;
 const date = entry.data.date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+
+const categoryColors: Record<string, string> = {
+  "System Design":        "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-400",
+  "Agentic AI":           "bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-400",
+  "Life Experiences":     "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400",
+  "Frontend Engineering": "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400",
+  "Debugging":            "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400",
+};
+const fallbackColor = "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400";
+const tagColor = entry.data.category ? (categoryColors[entry.data.category] ?? fallbackColor) : null;
 ---
 
 <a href={`/${entry.collection}/${entry.slug}`} class="relative group flex flex-nowrap py-3 px-4 pr-10 rounded-lg border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white transition-colors duration-300 ease-in-out">
@@ -19,15 +29,15 @@ const date = entry.data.date.toLocaleDateString("en-US", { year: "numeric", mont
     </div>
     <div class="flex items-center gap-2 mt-1">
       <span class="text-xs text-black/40 dark:text-white/40">{date}</span>
-      {entry.data.category && (
-        <span class="text-xs font-medium px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-black/50 dark:text-white/50">
+      {tagColor && (
+        <span class={`text-xs font-medium px-2 py-0.5 rounded-full ${tagColor}`}>
           {entry.data.category}
         </span>
       )}
     </div>
   </div>
-  <svg 
-    xmlns="http://www.w3.org/2000/svg" 
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
     viewBox="0 0 24 24"
     class="absolute top-1/2 right-2 -translate-y-1/2 size-5 stroke-2 fill-none stroke-current">
     <line x1="5" y1="12" x2="19" y2="12" class="translate-x-3 group-hover:translate-x-0 scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-in-out" />

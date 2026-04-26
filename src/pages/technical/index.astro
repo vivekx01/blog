@@ -1,78 +1,155 @@
 ---
-import { getCollection } from "astro:content";
+import { type CollectionEntry, getCollection } from "astro:content";
 import PageLayout from "@layouts/PageLayout.astro";
 import Container from "@components/Container.astro";
+import ArrowCard from "@components/ArrowCard.astro";
 import BackToPrev from "@components/BackToPrev.astro";
 import { BLOG } from "@consts";
 
 const allPosts = (await getCollection("blog"))
-  .filter(post => !post.data.draft)
-  .filter(post => post.slug.startsWith("technical/"));
+  .filter((post) => !post.data.draft && post.slug.startsWith("technical/"))
+  .sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
 
-const categoryMap = new Map<string, { count: number; latest: Date }>();
-
-for (const post of allPosts) {
-  const parts = post.slug.split("/");
-  if (parts.length >= 3) {
-    const slug = parts[1];
-    const existing = categoryMap.get(slug);
-    if (!existing || post.data.date > existing.latest) {
-      categoryMap.set(slug, {
-        count: (existing?.count ?? 0) + 1,
-        latest: existing ? (post.data.date > existing.latest ? post.data.date : existing.latest) : post.data.date,
-      });
-    } else {
-      existing.count++;
-    }
-  }
-}
-
-const categories = Array.from(categoryMap.entries())
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([slug, { count, latest }]) => ({
-    slug,
-    name: slug.charAt(0).toUpperCase() + slug.slice(1).replace(/-/g, " "),
-    count,
-    latest: latest.toLocaleDateString("en-US", { year: "numeric", month: "short" }),
-  }));
+const subcategories = [...new Set(
+  allPosts.map((post) => post.data.category).filter(Boolean) as string[]
+)].sort();
 ---
 
 <PageLayout title={BLOG.TITLE} description={BLOG.DESCRIPTION}>
   <Container>
-    <div class="space-y-10">
+    <div class="space-y-6">
       <div class="animate">
-        <BackToPrev href={import.meta.env.BASE_URL}>
-          Back
-        </BackToPrev>
+        <BackToPrev href={import.meta.env.BASE_URL}>Back</BackToPrev>
       </div>
+
       <div class="animate font-semibold text-black dark:text-white">
         Technical Writings
       </div>
-      <ul class="flex flex-col gap-3">
-        {categories.map(({ slug, name, count, latest }) => (
-          <li class="animate">
-            <a
-              href={`/blog/technical/${slug}`}
-              class="relative group flex items-center justify-between py-3 px-4 pr-10 rounded-lg border border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/5 hover:text-black dark:hover:text-white transition-colors duration-300 ease-in-out"
-            >
-              <div class="flex flex-col gap-0.5">
-                <span class="font-semibold">{name}</span>
-                <span class="text-xs text-black/40 dark:text-white/40">
-                  {count} article{count !== 1 ? "s" : ""} &middot; latest {latest}
-                </span>
-              </div>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                class="absolute top-1/2 right-2 -translate-y-1/2 size-5 stroke-2 fill-none stroke-current"
-              >
-                <line x1="5" y1="12" x2="19" y2="12" class="translate-x-3 group-hover:translate-x-0 scale-x-0 group-hover:scale-x-100 transition-transform duration-300 ease-in-out" />
-                <polyline points="12 5 19 12 12 19" class="-translate-x-1 group-hover:translate-x-0 transition-transform duration-300 ease-in-out" />
-              </svg>
-            </a>
-          </li>
+
+      <div class="animate flex flex-wrap gap-2" id="subcategory-tabs">
+        <button
+          type="button"
+          data-sub="all"
+          class="tab-btn px-3 py-1.5 text-sm rounded-full border transition-colors duration-200 bg-black text-white dark:bg-white dark:text-black border-black dark:border-white"
+        >
+          All
+        </button>
+        {subcategories.map((sub) => (
+          <button
+            type="button"
+            data-sub={sub}
+            class="tab-btn px-3 py-1.5 text-sm rounded-full border transition-colors duration-200 border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/5 text-black/70 dark:text-white/70"
+          >
+            {sub}
+          </button>
         ))}
-      </ul>
+      </div>
+
+      <div class="animate">
+        <ul id="posts-list" class="flex flex-col gap-4">
+          {allPosts.map((post) => (
+            <li class="post-item" data-sub={post.data.category ?? ""}>
+              <ArrowCard entry={post} />
+            </li>
+          ))}
+        </ul>
+        <p id="no-results" class="hidden text-center py-10 text-sm text-black/40 dark:text-white/40">
+          No articles here yet.
+        </p>
+      </div>
+
+      <div id="pagination" class="animate flex items-center justify-center gap-1.5 pt-2"></div>
     </div>
   </Container>
 </PageLayout>
+
+<script>
+  const POSTS_PER_PAGE = 10;
+  let activeSub = "all";
+  let currentPage = 1;
+
+  function getItems(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>(".post-item"));
+  }
+
+  function getFiltered(): HTMLElement[] {
+    const items = getItems();
+    if (activeSub === "all") return items;
+    return items.filter((i) => i.dataset.sub === activeSub);
+  }
+
+  function update() {
+    const filtered = getFiltered();
+    const totalPages = Math.max(1, Math.ceil(filtered.length / POSTS_PER_PAGE));
+    if (currentPage > totalPages) currentPage = 1;
+
+    const start = (currentPage - 1) * POSTS_PER_PAGE;
+    getItems().forEach((i) => (i.style.display = "none"));
+    filtered.slice(start, start + POSTS_PER_PAGE).forEach((i) => (i.style.display = ""));
+
+    const noResults = document.getElementById("no-results");
+    if (noResults) noResults.style.display = filtered.length === 0 ? "" : "none";
+
+    renderPagination(totalPages);
+  }
+
+  function renderPagination(total: number) {
+    const container = document.getElementById("pagination");
+    if (!container) return;
+    if (total <= 1) { container.innerHTML = ""; return; }
+
+    const base = "w-9 h-9 text-sm rounded-lg border transition-colors duration-200 flex items-center justify-center";
+    const inactive = "border-black/15 dark:border-white/20 hover:bg-black/5 dark:hover:bg-white/5 text-black/70 dark:text-white/70";
+    const active = "bg-black dark:bg-white text-white dark:text-black border-black dark:border-white font-medium";
+    const disabled = "opacity-30 cursor-not-allowed border-black/10 dark:border-white/10";
+
+    let html = `<button type="button" id="pg-prev" class="${base} px-3 w-auto ${currentPage === 1 ? disabled : inactive}">← Prev</button>`;
+    for (let i = 1; i <= total; i++) {
+      html += `<button type="button" data-pg="${i}" class="pg-num ${base} ${i === currentPage ? active : inactive}">${i}</button>`;
+    }
+    html += `<button type="button" id="pg-next" class="${base} px-3 w-auto ${currentPage === total ? disabled : inactive}">Next →</button>`;
+
+    container.innerHTML = html;
+
+    document.getElementById("pg-prev")?.addEventListener("click", () => {
+      if (currentPage > 1) { currentPage--; update(); scrollTo({ top: 0, behavior: "smooth" }); }
+    });
+    document.getElementById("pg-next")?.addEventListener("click", () => {
+      if (currentPage < total) { currentPage++; update(); scrollTo({ top: 0, behavior: "smooth" }); }
+    });
+    container.querySelectorAll<HTMLElement>(".pg-num").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentPage = parseInt(btn.dataset.pg ?? "1");
+        update();
+        scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+  }
+
+  function init() {
+    activeSub = "all";
+    currentPage = 1;
+    update();
+  }
+
+  // Event delegation on document survives DOM swaps
+  document.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>("#subcategory-tabs .tab-btn");
+    if (!btn || !btn.dataset.sub) return;
+
+    activeSub = btn.dataset.sub;
+    currentPage = 1;
+
+    document.querySelectorAll<HTMLElement>(".tab-btn").forEach((b) => {
+      b.classList.remove("bg-black", "text-white", "dark:bg-white", "dark:text-black", "border-black", "dark:border-white");
+      b.classList.add("border-black/15", "dark:border-white/20", "text-black/70", "dark:text-white/70");
+    });
+    btn.classList.add("bg-black", "text-white", "dark:bg-white", "dark:text-black", "border-black", "dark:border-white");
+    btn.classList.remove("border-black/15", "dark:border-white/20", "text-black/70", "dark:text-white/70");
+
+    update();
+  });
+
+  document.addEventListener("astro:after-swap", init);
+  init();
+</script>

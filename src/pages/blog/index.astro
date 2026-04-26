@@ -17,30 +17,20 @@ const slugifyCategory = (name: string) =>
   name.toLowerCase().replace(/\s+/g, "-");
 
 const getCategory = (post: CollectionEntry<"blog">) => {
-  if (post.data.category) {
-    return post.data.category;
-  }
-
+  if (post.data.category) return post.data.category;
   const parts = post.slug.split("/");
   const section = parts[0];
   const subcategory = parts[1];
-
   if (section === "technical" && subcategory) {
     return subcategory.charAt(0).toUpperCase() + subcategory.slice(1).replace(/-/g, " ");
   }
-
-  if (section === "life-experiences") {
-    return "Life Experiences";
-  }
-
+  if (section === "life-experiences") return "Life Experiences";
   return "General";
 };
 
 const postsByCategory = allPosts.reduce((acc: CategoryPosts, post) => {
   const category = getCategory(post);
-  if (!acc[category]) {
-    acc[category] = [];
-  }
+  if (!acc[category]) acc[category] = [];
   acc[category].push(post);
   return acc;
 }, {});
@@ -64,19 +54,16 @@ const categories = Object.keys(postsByCategory).sort((a, b) => {
             <div class="font-semibold text-lg text-black dark:text-white border-b border-black/10 dark:border-white/10 pb-2">
               {name}
             </div>
-            <div>
-              <ul class="flex flex-col gap-4">
-                {postsByCategory[name].map((post) => (
-                  <li>
-                    <ArrowCard entry={post} />
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <ul class="flex flex-col gap-4">
+              {postsByCategory[name].map((post) => (
+                <li>
+                  <ArrowCard entry={post} />
+                </li>
+              ))}
+            </ul>
           </section>
         ))}
       </div>
     </div>
   </Container>
 </PageLayout>
-
