@@ -1,0 +1,253 @@
+---
+title: "How to Actually Evaluate Your Agents"
+description: "A layered approach to agent evaluation: from deterministic checks and trajectory evals to LLM-as-judge and human review."
+date: "2026-05-10"
+draft: false
+category: "Agentic AI"
+---
+
+import Mermaid from "@components/Mermaid.astro";
+
+Your agent works in the demo. It sort of works in testing. And in production it occasionally does something completely wrong. You only find out because a user told you.
+
+This is the agent evaluation problem. And it's harder than it looks.
+
+With a traditional ML model, you run it against a held-out test set, compute accuracy or F1, and you have a number. Not a perfect number, but a signal. With agents, that approach falls apart almost immediately. The failures are subtler, the outputs are harder to score, and the systems are harder to isolate.
+
+Most teams respond to this by either not evaluating properly at all (just vibes-checking outputs during development), or reaching for a single technique and hoping it covers everything.
+
+Neither works well. What you actually need is a stack: a set of complementary techniques that, together, give you coverage that no single approach can.
+
+---
+
+## Why agents break traditional evaluation
+
+Before getting to the stack, here's why agents are hard to evaluate in the first place. There are three separate reasons, and they each need a different fix.
+
+**Non-determinism.** The same input to a language model doesn't produce the same output twice. A test that passes today might fail tomorrow on an identical input, not because anything changed, but because the model sampled differently. Hard assertions against exact output strings don't work. Even "soft" checks break if you set the bar in the wrong place.
+
+**Multi-step error compounding.** An agent isn't a function you call once. It's a pipeline. A bad decision at step two propagates silently through steps three, four, and five. The final output can look entirely plausible while being wrong in a way that traces back to something that happened early in the execution. Checking only the final output misses this. You can't distinguish a correct path to a correct answer from a wrong path to a lucky answer.
+
+**No ground truth.** For open-ended tasks like drafting a plan, researching a topic, or generating a report, there's no canonical right answer. The space of acceptable outputs is large, the space of unacceptable outputs is subtle, and hand-labelling ground truth at scale is expensive. Traditional accuracy metrics don't apply.
+
+This is why you need layers. Each layer addresses a different failure mode. Together they get you closer to an answer than any one of them alone.
+
+<Mermaid code={`flowchart BT
+    L1["Layer 1: Deterministic checks\n────────────────────\nSchema, tool call validity,\nhard constraints"]
+    L2["Layer 2: Trajectory evaluation\n────────────────────\nStep count, tool sequence,\nbacktracking, coverage"]
+    L3["Layer 3: LLM-as-judge\n────────────────────\nOutput quality, tone,\ncompleteness, relevance"]
+    L4["Layer 4: Human evaluation\n────────────────────\nGround truth, calibration,\npre-release sign-off"]
+
+    L1 --> L2 --> L3 --> L4
+
+    style L1 fill:#97C459,stroke:#639922,color:#173404
+    style L2 fill:#5DCAA5,stroke:#1D9E75,color:#04342C
+    style L3 fill:#EF9F27,stroke:#BA7517,color:#412402
+    style L4 fill:#AFA9EC,stroke:#7F77DD,color:#26215C
+`} />
+
+Each layer builds on the one below it. You can't trust layer three if layer one is failing. You can't calibrate layer three without layer four.
+
+---
+
+## Layer 1: Deterministic checks
+
+These are the only evals you can run in CI (Continuous Integration) without flinching. They're fast, cheap, and 100% reproducible. If they're failing, nothing else matters until you fix them.
+
+**Output schema.** Your agent should be returning structured output. If it isn't, that's the first fix. Once it is, validate the schema on every run.
+
+```python
+from pydantic import BaseModel, ValidationError
+
+class AgentOutput(BaseModel):
+    summary: str
+    action_items: list[str]
+    confidence: float
+    sources: list[str]
+
+def validate_output(raw: dict) -> AgentOutput:
+    try:
+        return AgentOutput(**raw)
+    except ValidationError as e:
+        raise ValueError(f"Agent returned invalid output: {e}")
+```
+
+A schema violation is an unambiguous failure. No LLM judgment required.
+
+**Tool call validity.** If your agent calls tools, log every call. After each run, check that every tool name was a real tool, every required parameter was present, and the values were within expected ranges.
+
+```python
+VALID_TOOLS = {"web_search", "read_file", "write_file", "summarise"}
+
+def validate_tool_calls(trace: list[dict]) -> list[str]:
+    errors = []
+    for call in trace:
+        if call["tool"] not in VALID_TOOLS:
+            errors.append(f"Unknown tool: {call['tool']}")
+        if "query" not in call.get("args", {}):
+            errors.append(f"Missing required arg 'query' in {call['tool']} call")
+    return errors
+```
+
+**Hard constraints.** These are things that must always be true, regardless of the task. No PII in the output. Dates that are real calendar dates. URLs that are syntactically valid. Responses within a character limit. Write a check for each one.
+
+These three checks together won't tell you if your agent is *good*. They'll tell you if it's *broken*. That's the foundation everything else sits on.
+
+---
+
+## Layer 2: Trajectory evaluation
+
+This is the most underused technique in agent evaluation, and the one that gives you the most signal per unit of effort.
+
+The idea is simple: don't only check where the agent ended up. Check how it got there.
+
+A hallucinated final answer and a correct final answer can look identical on output. The trajectory tells you which one you have. An agent that took 14 tool calls to complete a 3-step task has a very different reliability profile than one that took 4. An agent that searched before summarising is doing something fundamentally different from one that summarised and then searched to justify it.
+
+**What to check in a trajectory:**
+
+- **Step count.** Set a maximum. An agent that loops or over-plans is a reliability risk even if it eventually gets the right answer.
+- **Tool call sequence.** Some orderings are wrong by definition. If your agent is supposed to gather context before acting, verify that gathering happened before acting.
+- **Backtracking.** Repeated calls to the same tool with the same arguments is a sign of confusion. Log it.
+- **Coverage.** For tasks where you know which tools should have been called, check that they were.
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class TraceAssertion:
+    max_steps: int | None = None
+    required_tools: list[str] | None = None
+    tool_order: list[tuple[str, str]] | None = None  # (before, after)
+
+def assert_trace(trace: list[dict], assertion: TraceAssertion) -> list[str]:
+    violations = []
+    tool_sequence = [call["tool"] for call in trace]
+
+    if assertion.max_steps and len(trace) > assertion.max_steps:
+        violations.append(f"Exceeded max steps: {len(trace)} > {assertion.max_steps}")
+
+    if assertion.required_tools:
+        for tool in assertion.required_tools:
+            if tool not in tool_sequence:
+                violations.append(f"Required tool not called: {tool}")
+
+    if assertion.tool_order:
+        for before, after in assertion.tool_order:
+            if before in tool_sequence and after in tool_sequence:
+                if tool_sequence.index(before) > tool_sequence.index(after):
+                    violations.append(f"Order violated: {before} must come before {after}")
+
+    return violations
+```
+
+Write one assertion set per critical workflow. When a violation shows up in CI, you know something changed (a prompt update, a model change, a tool modification) and the agent is behaving differently.
+
+The trajectory is your behavioral contract with the agent. Hold it to that contract.
+
+---
+
+## Layer 3: LLM-as-judge
+
+When you need to evaluate something that can't be expressed as a rule, like the quality of a summary, the tone of a response, or whether a plan is sensible, you reach for LLM-as-judge. Another model scores the output.
+
+It works. With caveats.
+
+**The traps you will fall into:**
+
+*Same-model bias.* GPT-4 grading GPT-4 output, or Claude grading Claude output, inflates scores. The judge is predisposed to prefer outputs that match its own style and reasoning. Use a different model family as your judge.
+
+*Length bias.* Judges systematically prefer longer outputs, even when shorter is better. Build this into your rubric explicitly: "Do not score a response higher simply because it is longer."
+
+*Vague rubrics.* "Is this a good response?" is not a rubric. It gives the judge no grounding and produces results that are neither reproducible nor useful. Break the rubric into specific, answerable questions.
+
+```python
+from pydantic import BaseModel
+from anthropic import Anthropic
+
+class JudgeScores(BaseModel):
+    answers_the_question: bool
+    stays_within_context: bool   # no hallucinated information
+    appropriate_length: bool     # not padded, not truncated
+    quality_score: int           # 1-5, where 3 = acceptable
+
+def judge_output(question: str, context: str, agent_response: str) -> JudgeScores:
+    client = Anthropic()
+
+    prompt = f"""You are evaluating an AI agent's response. Answer each question honestly.
+
+Question the agent was asked: {question}
+Context the agent had access to: {context}
+Agent's response: {agent_response}
+
+Scoring guidance:
+- answers_the_question: Does the response directly address what was asked?
+- stays_within_context: Does it avoid introducing information not present in the context?
+- appropriate_length: Is it concise — not padded, not truncated?
+- quality_score: 1=unusable, 2=poor, 3=acceptable, 4=good, 5=excellent
+
+Do not score higher simply because a response is longer."""
+
+    response = client.messages.create(
+        model="claude-opus-4-7",
+        max_tokens=500,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    return JudgeScores.model_validate_json(response.content[0].text)
+```
+
+Run the judge three times on the same output and average the scores. Variance is a signal too. High variance means your rubric is underspecified or the output is genuinely ambiguous.
+
+A good rubric asks 3-5 specific yes/no or 1-5 questions rather than one holistic score. The specificity is what makes the result actionable: if `stays_within_context` is consistently failing, you know exactly what to fix.
+
+---
+
+## Layer 4: Human evaluation
+
+Expensive. Slow. Irreplaceable.
+
+Human eval is not for every run. It's for calibration and for high-stakes decisions. Use it strategically.
+
+**Calibrate your LLM-as-judge.** This is the most important use. Take 50 outputs. Have humans score them using the same rubric you're giving the judge. Compare the results. If they diverge systematically, your rubric is wrong. Fix it before you trust the judge at scale.
+
+**Run it before major releases.** When you change a prompt significantly, switch model versions, or add a new capability, run a human eval pass on a representative sample before shipping. Automated metrics can look fine while user experience quietly degrades. This is the signal mismatch problem, and human eval is the only thing that catches it.
+
+**Use it when automated metrics and user signals disagree.** If your LLM-as-judge scores are trending up while user complaints are also trending up, something your automated stack isn't measuring is getting worse. Humans need to look at the outputs.
+
+The setup doesn't have to be sophisticated. A spreadsheet with the agent's output, a thumbs up/down column, and a notes field is enough to start. The discipline of reviewing outputs systematically is what matters, not the tooling.
+
+Humans are uniquely good at catching "technically correct but actually useless" outputs: things that pass every automated check and still fail the user.
+
+---
+
+## Putting the stack together
+
+Here's how to think about when to run each layer:
+
+| Layer | When to run | Cost | What it catches |
+|---|---|---|---|
+| Deterministic checks | Every build | Negligible | Hard failures, schema violations |
+| Trajectory evals | Every build + staging | Low | Behavioral drift, loops |
+| LLM-as-judge | Nightly or on deploy | Medium | Quality regression |
+| Human eval | Pre-release, calibration | High | Ground truth, signal mismatch |
+
+On tooling: **LangSmith** and **Langfuse** both give you tracing out of the box, which makes trajectory evals much easier since the tool call log is already there. For layers one and two, a Python script and a Pydantic model get you surprisingly far without any platform at all.
+
+The platform choice matters less than having each layer at all. Start with whatever's easiest to run right now.
+
+---
+
+## The minimum viable eval setup
+
+Agent evaluation is still an unsolved problem. The research is active, the tooling is immature, and anyone who tells you they have it fully figured out is probably selling something.
+
+But you don't need a perfect eval system to have a useful one. The minimum that gives you real signal:
+
+1. **Schema validation in CI.** Catch hard failures on every build.
+2. **One trajectory assertion per critical workflow.** Know when behavior changes, even if you don't know why yet.
+3. **An LLM-as-judge with a specific rubric.** Run nightly. Track the scores over time. Look for regressions.
+4. **Human eval before anything important ships.** Non-negotiable.
+
+Build this incrementally. The first check you add is the most important one.
+
+If you've been thinking about how to evaluate your agents and have found approaches that work, or ones that definitely don't, I'd like to hear about them. Drop a comment.
